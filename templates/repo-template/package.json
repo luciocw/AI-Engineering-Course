@@ -1,0 +1,12 @@
+{
+  "name": "project-name",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "dev": "npx tsx src/index.ts",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage"
+  },
+  "license": "MIT"
+}

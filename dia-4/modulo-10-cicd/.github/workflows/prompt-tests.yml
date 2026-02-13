@@ -1,0 +1,19 @@
+# Placeholder - sera implementado no Modulo 10
+name: Prompt Quality Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  prompt-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run test:prompts
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

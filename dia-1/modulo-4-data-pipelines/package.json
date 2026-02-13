@@ -1,0 +1,18 @@
+{
+  "name": "modulo-4-data-pipelines",
+  "version": "1.0.0",
+  "description": "Modulo 4: Data Pipelines para AI",
+  "type": "module",
+  "scripts": {
+    "test": "vitest"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,13 @@
+# Placeholder - sera implementado no Modulo 11
+services:
+  - type: web
+    name: ai-service
+    env: node
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ANTHROPIC_API_KEY
+        sync: false

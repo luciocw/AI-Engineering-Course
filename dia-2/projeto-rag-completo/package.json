@@ -1,0 +1,24 @@
+{
+  "name": "projeto-rag-completo",
+  "version": "1.0.0",
+  "description": "Projeto RAG Completo: Documentation Q&A System",
+  "type": "module",
+  "scripts": {
+    "dev": "npx tsx src/api/server.ts",
+    "cli": "npx tsx examples/query-cli.ts",
+    "index": "npx tsx examples/index-docs.ts",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@qdrant/js-client-rest": "^1.12.0",
+    "express": "^4.21.0",
+    "openai": "^4.70.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "ai-engineering-course",
+  "version": "2.0.0",
+  "description": "Curso completo de AI Engineering: do zero ao portfolio profissional",
+  "type": "module",
+  "scripts": {
+    "verify-setup": "npx tsx scripts/verify-setup.ts",
+    "start": "echo 'Navegue para dia-1/modulo-1-handlebars e siga o README.md'",
+    "test": "echo 'Execute npm test dentro de cada modulo individualmente'"
+  },
+  "keywords": [
+    "ai-engineering",
+    "claude-api",
+    "rag",
+    "prompt-engineering",
+    "mlops",
+    "vector-database",
+    "course"
+  ],
+  "author": "Lucio CW",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luciocw/AI-Engineering-Course.git"
+  },
+  "homepage": "https://github.com/luciocw/AI-Engineering-Course#readme",
+  "bugs": {
+    "url": "https://github.com/luciocw/AI-Engineering-Course/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

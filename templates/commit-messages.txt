@@ -1,0 +1,35 @@
+# Exemplos de Commit Messages para o Curso
+# Use Conventional Commits: tipo(escopo): descricao
+
+# Dia 1 - Handlebars & Claude API
+feat(templates): add email template with variables
+feat(templates): implement conditional logic for user types
+feat(helpers): create truncate and currency helpers
+feat(claude): integrate Claude API with system prompts
+feat(tools): add first tool definition with weather API
+feat(pipeline): implement CSV processing pipeline
+test(templates): add template rendering tests
+docs: add usage examples to README
+
+# Dia 2 - RAG
+feat(embeddings): implement embedding service with cache
+feat(vectordb): setup Qdrant client and collection schema
+feat(chunking): add overlap chunking strategy
+feat(rag): implement complete RAG pipeline
+perf(retrieval): optimize semantic search with scoring
+docs: add RAG architecture diagram
+
+# Dia 3 - Multi-Agent
+feat(agent): create base agent orchestrator
+feat(tools): add web search tool with error handling
+feat(tools): implement calculator with validation
+feat(rag): integrate RAG knowledge retrieval
+feat(api): add REST API endpoints with streaming
+test(integration): add end-to-end agent tests
+
+# Dia 4 - Production
+feat(docker): add Dockerfile and docker-compose
+feat(ci): setup GitHub Actions CI/CD workflow
+feat(monitoring): integrate LangSmith tracing
+feat(deploy): add Railway deployment config
+docs: add deployment guide and architecture diagram

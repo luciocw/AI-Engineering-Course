@@ -1,0 +1,18 @@
+{
+  "name": "modulo-5-embeddings-vectordb",
+  "version": "1.0.0",
+  "description": "Modulo 5: Embeddings & Vector Databases",
+  "type": "module",
+  "scripts": {
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@qdrant/js-client-rest": "^1.12.0",
+    "openai": "^4.70.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
