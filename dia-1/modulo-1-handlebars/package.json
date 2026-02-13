@@ -1,0 +1,28 @@
+{
+  "name": "modulo-1-handlebars",
+  "version": "1.0.0",
+  "description": "Modulo 1: Templates Dinamicos com Handlebars",
+  "type": "module",
+  "scripts": {
+    "ex1": "npx tsx exercicios/ex1-email-basico.ts",
+    "ex2": "npx tsx exercicios/ex2-condicionais.ts",
+    "ex3": "npx tsx exercicios/ex3-loops.ts",
+    "ex4": "npx tsx exercicios/ex4-helpers.ts",
+    "ex5": "npx tsx exercicios/ex5-prompt-ai.ts",
+    "sol1": "npx tsx solucoes/ex1-email-basico.ts",
+    "sol2": "npx tsx solucoes/ex2-condicionais.ts",
+    "sol3": "npx tsx solucoes/ex3-loops.ts",
+    "sol4": "npx tsx solucoes/ex4-helpers.ts",
+    "sol5": "npx tsx solucoes/ex5-prompt-ai.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "handlebars": "^4.7.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
