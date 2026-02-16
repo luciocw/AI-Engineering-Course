@@ -25,24 +25,6 @@
 
 ## Quick Start
 
-```bash
-# 1. Clone
-git clone https://github.com/luciocw/AI-Engineering-Course.git
-cd AI-Engineering-Course
-
-# 2. Configure API keys
-cp .env.example .env
-# Edite .env com suas keys
-
-# 3. Valide setup
-npx tsx scripts/verify-setup.ts
-
-# 4. Comece o Dia 1
-cd dia-1/modulo-1-handlebars
-npm install
-cat README.md
-```
-
 ## Estrutura do Curso
 
 ```
