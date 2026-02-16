@@ -1,0 +1,13 @@
+id,nome,email,plano,mrr,data_inicio,status,industria
+1,TechCorp,contato@techcorp.com,Enterprise,999,2024-06-15,ativo,Tecnologia
+2,StartupXYZ,admin@startupxyz.com,Pro,299,2025-08-01,ativo,Fintech
+3,BigData Inc,vendas@bigdata.com,Enterprise,999,2024-01-10,ativo,Dados
+4,DevShop,contato@devshop.io,Starter,49,2025-11-20,churned,Desenvolvimento
+5,CloudFirst,cloud@first.com,Pro,299,2025-02-14,ativo,Cloud
+6,DataFlow,admin@dataflow.ai,Pro,299,2025-10-05,churned,Dados
+7,AILabs,labs@ailabs.com,Enterprise,999,2025-06-01,ativo,IA
+8,WebAgency,contato@webagency.com,Starter,49,2026-01-15,churned,Marketing
+9,SecureNet,admin@securenet.io,Pro,299,2025-04-22,ativo,Seguranca
+10,EduTech,contato@edutech.com.br,Starter,49,2025-09-10,ativo,Educacao
+11,HealthAI,saude@healthai.com,Enterprise,999,2024-11-01,ativo,Saude
+12,RetailPro,vendas@retailpro.com,Pro,299,2025-07-18,ativo,Varejo

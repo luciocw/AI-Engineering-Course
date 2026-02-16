@@ -4,7 +4,22 @@
   "description": "Modulo 2: Claude API + Prompt Engineering Avancado",
   "type": "module",
   "scripts": {
-    "test": "vitest"
+    "ex1": "npx tsx exercicios/ex1-hello-world.ts",
+    "ex2": "npx tsx exercicios/ex2-system-prompt.ts",
+    "ex3": "npx tsx exercicios/ex3-conversacao.ts",
+    "ex4": "npx tsx exercicios/ex4-parametros.ts",
+    "ex5": "npx tsx exercicios/ex5-handlebars-integration.ts",
+    "ex6": "npx tsx exercicios/ex6-few-shot.ts",
+    "ex7": "npx tsx exercicios/ex7-chain-of-thought.ts",
+    "sol1": "npx tsx solucoes/ex1-hello-world.ts",
+    "sol2": "npx tsx solucoes/ex2-system-prompt.ts",
+    "sol3": "npx tsx solucoes/ex3-conversacao.ts",
+    "sol4": "npx tsx solucoes/ex4-parametros.ts",
+    "sol5": "npx tsx solucoes/ex5-handlebars-integration.ts",
+    "sol6": "npx tsx solucoes/ex6-few-shot.ts",
+    "sol7": "npx tsx solucoes/ex7-chain-of-thought.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

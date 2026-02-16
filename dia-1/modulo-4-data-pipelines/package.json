@@ -4,7 +4,16 @@
   "description": "Modulo 4: Data Pipelines para AI",
   "type": "module",
   "scripts": {
-    "test": "vitest"
+    "ex1": "tsx exercicios/ex1-csv-processing.ts",
+    "ex2": "tsx exercicios/ex2-json-transform.ts",
+    "ex3": "tsx exercicios/ex3-data-validation.ts",
+    "ex4": "tsx exercicios/ex4-etl-pipeline.ts",
+    "sol1": "tsx solucoes/ex1-csv-processing.ts",
+    "sol2": "tsx solucoes/ex2-json-transform.ts",
+    "sol3": "tsx solucoes/ex3-data-validation.ts",
+    "sol4": "tsx solucoes/ex4-etl-pipeline.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "csv-parse": "^5.5.0",
