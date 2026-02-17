@@ -1,0 +1,317 @@
+---
+title: "Human-in-the-Loop Confirmation"
+description: "Implement user confirmation before executing dangerous tools, build approval workflows, and control which actions require human oversight."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 15
+difficulty: "advanced"
+estimatedMinutes: 20
+isFree: true
+tags: ["tools", "function-calling", "human-in-the-loop", "confirmation", "safety", "approval", "advanced"]
+---
+
+## What You'll Learn
+
+- Why some tools need human approval before execution
+- Implementing a confirmation step in the tool loop
+- Categorizing tools by risk level (read vs. write vs. destructive)
+- Building approval workflows with accept/reject/modify options
+
+## Key Concepts
+
+### Why Human-in-the-Loop?
+
+Some tool actions are irreversible or have real-world consequences:
+- Sending an email
+- Deleting records
+- Making purchases
+- Posting to social media
+- Modifying production data
+
+For these, you want a human to confirm before the action executes. The LLM proposes the action, the human approves (or rejects), and only then does it run.
+
+### Categorizing Tools by Risk Level
+
+```typescript
+type RiskLevel = "safe" | "moderate" | "dangerous";
+
+interface ToolConfig {
+  definition: Anthropic.Tool;
+  handler: (input: Record<string, unknown>) => Promise<string>;
+  riskLevel: RiskLevel;
+  confirmationMessage?: (input: Record<string, unknown>) => string;
+}
+
+const toolConfigs: ToolConfig[] = [
+  {
+    definition: { name: "search_products", /* ... */ } as Anthropic.Tool,
+    handler: async (input) => searchProducts(input),
+    riskLevel: "safe", // Read-only, no side effects
+  },
+  {
+    definition: { name: "update_profile", /* ... */ } as Anthropic.Tool,
+    handler: async (input) => updateProfile(input),
+    riskLevel: "moderate", // Modifies data but reversible
+    confirmationMessage: (input) =>
+      `Update your profile with: ${JSON.stringify(input, null, 2)}?`,
+  },
+  {
+    definition: { name: "send_email", /* ... */ } as Anthropic.Tool,
+    handler: async (input) => sendEmail(input),
+    riskLevel: "dangerous", // Irreversible external action
+    confirmationMessage: (input) =>
+      `Send email to ${input.to} with subject "${input.subject}"?`,
+  },
+  {
+    definition: { name: "delete_account", /* ... */ } as Anthropic.Tool,
+    handler: async (input) => deleteAccount(input),
+    riskLevel: "dangerous",
+    confirmationMessage: (input) =>
+      `PERMANENTLY DELETE account ${input.account_id}? This cannot be undone!`,
+  },
+];
+```
+
+### The Confirmation Interface
+
+For a CLI application, use readline for user input:
+
+```typescript
+import * as readline from "readline";
+
+async function getUserConfirmation(message: string): Promise<"approve" | "reject" | "modify"> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    console.log("\n" + "=".repeat(60));
+    console.log("CONFIRMATION REQUIRED");
+    console.log("=".repeat(60));
+    console.log(message);
+    console.log("\nOptions: [y]es / [n]o / [m]odify");
+
+    rl.question("> ", (answer) => {
+      rl.close();
+      const lower = answer.toLowerCase().trim();
+      if (lower === "y" || lower === "yes") {
+        resolve("approve");
+      } else if (lower === "m" || lower === "modify") {
+        resolve("modify");
+      } else {
+        resolve("reject");
+      }
+    });
+  });
+}
+```
+
+### The Confirmation-Aware Tool Loop
+
+```typescript
+async function executeWithConfirmation(
+  block: Anthropic.ToolUseBlock,
+  configs: Map<string, ToolConfig>
+): Promise<Anthropic.ToolResultBlockParam> {
+  const config = configs.get(block.name);
+
+  if (!config) {
+    return {
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: JSON.stringify({ error: `Unknown tool: ${block.name}` }),
+      is_error: true,
+    };
+  }
+
+  // Safe tools execute immediately
+  if (config.riskLevel === "safe") {
+    const result = await config.handler(block.input as Record<string, unknown>);
+    return { type: "tool_result", tool_use_id: block.id, content: result };
+  }
+
+  // Moderate and dangerous tools need confirmation
+  const message = config.confirmationMessage
+    ? config.confirmationMessage(block.input as Record<string, unknown>)
+    : `Execute "${block.name}" with input: ${JSON.stringify(block.input)}?`;
+
+  const decision = await getUserConfirmation(message);
+
+  switch (decision) {
+    case "approve": {
+      const result = await config.handler(block.input as Record<string, unknown>);
+      return { type: "tool_result", tool_use_id: block.id, content: result };
+    }
+    case "reject": {
+      return {
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: JSON.stringify({
+          status: "rejected",
+          message: "The user declined this action.",
+        }),
+      };
+    }
+    case "modify": {
+      return {
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: JSON.stringify({
+          status: "modification_requested",
+          message: "The user wants to modify this action. " +
+            "Please ask them what they'd like to change.",
+        }),
+      };
+    }
+  }
+}
+```
+
+### The Complete Loop with Confirmation
+
+```typescript
+async function chatWithConfirmation(userMessage: string): Promise<string> {
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  const configMap = new Map(toolConfigs.map((c) => [c.definition.name, c]));
+
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    system:
+      "You are a helpful assistant. When an action is rejected by the user, " +
+      "acknowledge their decision and ask if there's something else you can help with. " +
+      "When modification is requested, ask what they'd like to change.",
+    tools: toolConfigs.map((c) => c.definition),
+    messages,
+  });
+
+  while (response.stop_reason === "tool_use") {
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        const result = await executeWithConfirmation(block, configMap);
+        toolResults.push(result);
+      }
+    }
+
+    messages.push({ role: "user", content: toolResults });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      system:
+        "You are a helpful assistant. When an action is rejected by the user, " +
+        "acknowledge their decision and ask if there's something else you can help with.",
+      tools: toolConfigs.map((c) => c.definition),
+      messages,
+    });
+  }
+
+  const text = response.content.find((b) => b.type === "text");
+  return text?.type === "text" ? text.text : "";
+}
+```
+
+### Preview Pattern
+
+For a better user experience, show a preview of what the tool will do before asking for confirmation:
+
+```typescript
+interface ToolPreview {
+  action: string;
+  details: Record<string, unknown>;
+  consequences: string[];
+  reversible: boolean;
+}
+
+function generatePreview(toolName: string, input: Record<string, unknown>): ToolPreview {
+  switch (toolName) {
+    case "send_email":
+      return {
+        action: "Send Email",
+        details: {
+          to: input.to,
+          subject: input.subject,
+          bodyPreview: (input.body as string)?.substring(0, 100) + "...",
+        },
+        consequences: [
+          "Email will be sent immediately",
+          "Recipient will be notified",
+          "This cannot be unsent",
+        ],
+        reversible: false,
+      };
+    case "delete_records":
+      return {
+        action: "Delete Records",
+        details: {
+          count: input.count,
+          filter: input.filter,
+        },
+        consequences: [
+          `${input.count} records will be permanently deleted`,
+          "This action cannot be undone",
+          "Related data may also be affected",
+        ],
+        reversible: false,
+      };
+    default:
+      return {
+        action: toolName,
+        details: input,
+        consequences: ["This action will be executed"],
+        reversible: true,
+      };
+  }
+}
+
+function formatPreview(preview: ToolPreview): string {
+  const lines = [
+    `Action: ${preview.action}`,
+    `Reversible: ${preview.reversible ? "Yes" : "NO"}`,
+    "",
+    "Details:",
+    ...Object.entries(preview.details).map(([k, v]) => `  ${k}: ${v}`),
+    "",
+    "Consequences:",
+    ...preview.consequences.map((c) => `  - ${c}`),
+  ];
+  return lines.join("\n");
+}
+```
+
+## Common Mistakes
+
+1. **Confirming everything** -- Asking for confirmation on read-only tools annoys users. Only confirm actions with side effects.
+
+2. **Not telling the LLM about rejections** -- If the user rejects a tool call, the LLM must know so it can respond appropriately. Return a clear "rejected" status.
+
+3. **Blocking on confirmation in a web server** -- In a web app, you cannot use `readline`. Instead, return the confirmation request as part of the API response and wait for the next user message.
+
+4. **Vague confirmation messages** -- "Proceed?" tells the user nothing. Show exactly what will happen: who gets the email, what gets deleted, how much it costs.
+
+5. **No way to modify** -- Sometimes the user wants to approve with changes ("yes, but change the recipient"). Supporting a "modify" option makes the experience much smoother.
+
+## Your Task
+
+Build a file management assistant with four tools:
+
+- `list_files` (safe) -- lists files in a directory
+- `read_file` (safe) -- reads a file's contents
+- `write_file` (moderate) -- creates or overwrites a file
+- `delete_file` (dangerous) -- permanently deletes a file
+
+Implement the human-in-the-loop confirmation system with:
+1. Risk levels assigned to each tool
+2. Preview messages that show exactly what will happen
+3. Approve / reject / modify workflow
+4. The LLM gracefully handling rejections
+
+Test with a conversation where the user asks to "clean up old log files" and confirm or reject individual deletions.

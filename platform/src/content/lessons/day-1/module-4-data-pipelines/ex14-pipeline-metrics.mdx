@@ -1,0 +1,306 @@
+---
+title: "Pipeline Metrics"
+description: "Learn to time operations, count processed and failed records, calculate error rates, and add observability to your data pipelines."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 14
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "metrics", "observability", "timing", "monitoring", "error-rate"]
+---
+
+## What You'll Learn
+
+You will learn how to add observability to your data pipelines: timing individual operations and stages, counting processed and failed records, calculating error rates and throughput, and building a metrics collector that gives you full visibility into pipeline performance. You cannot improve what you cannot measure.
+
+## Key Concepts
+
+### Why Metrics Matter
+
+Without metrics, your pipeline is a black box. "It finished" is not enough information. You need to know:
+
+- How long did each stage take?
+- How many records were processed successfully?
+- What is the error rate?
+- Where is the bottleneck?
+- Is performance degrading over time?
+
+In AI Engineering, metrics are especially important because LLM API calls are expensive and slow. Knowing exactly how much time and money each pipeline stage costs lets you optimize intelligently.
+
+### Timing Operations
+
+The simplest metric is a timer. Measure how long something takes:
+
+```typescript
+interface TimingResult<T> {
+  result: T;
+  durationMs: number;
+}
+
+async function timed<T>(
+  operation: () => Promise<T>
+): Promise<TimingResult<T>> {
+  const start = performance.now();
+  const result = await operation();
+  const durationMs = performance.now() - start;
+  return { result, durationMs };
+}
+
+// Usage
+const { result, durationMs } = await timed(() => classifyBatch(records));
+console.log(`Classification took ${durationMs.toFixed(1)}ms`);
+```
+
+For synchronous operations:
+
+```typescript
+function timedSync<T>(operation: () => T): TimingResult<T> {
+  const start = performance.now();
+  const result = operation();
+  const durationMs = performance.now() - start;
+  return { result, durationMs };
+}
+```
+
+### Building a Metrics Collector
+
+A metrics collector aggregates measurements across an entire pipeline run:
+
+```typescript
+interface StageMetrics {
+  name: string;
+  startTime: number;
+  endTime?: number;
+  durationMs?: number;
+  inputCount: number;
+  outputCount: number;
+  errorCount: number;
+  customMetrics: Record<string, number>;
+}
+
+class PipelineMetrics {
+  private stages: Map<string, StageMetrics> = new Map();
+  private pipelineStart: number = 0;
+
+  startPipeline(): void {
+    this.pipelineStart = performance.now();
+  }
+
+  startStage(name: string, inputCount: number): void {
+    this.stages.set(name, {
+      name,
+      startTime: performance.now(),
+      inputCount,
+      outputCount: 0,
+      errorCount: 0,
+      customMetrics: {},
+    });
+  }
+
+  endStage(name: string, outputCount: number, errorCount: number = 0): void {
+    const stage = this.stages.get(name);
+    if (!stage) throw new Error(`Stage "${name}" was never started`);
+
+    stage.endTime = performance.now();
+    stage.durationMs = stage.endTime - stage.startTime;
+    stage.outputCount = outputCount;
+    stage.errorCount = errorCount;
+  }
+
+  addCustomMetric(stageName: string, key: string, value: number): void {
+    const stage = this.stages.get(stageName);
+    if (stage) {
+      stage.customMetrics[key] = value;
+    }
+  }
+
+  getSummary(): PipelineSummary {
+    const stages = Array.from(this.stages.values());
+    const totalDuration = performance.now() - this.pipelineStart;
+
+    const totalInput = stages[0]?.inputCount ?? 0;
+    const totalOutput = stages[stages.length - 1]?.outputCount ?? 0;
+    const totalErrors = stages.reduce((sum, s) => sum + s.errorCount, 0);
+
+    return {
+      totalDurationMs: totalDuration,
+      totalInput,
+      totalOutput,
+      totalErrors,
+      errorRate: totalInput > 0 ? totalErrors / totalInput : 0,
+      throughputPerSecond:
+        totalDuration > 0 ? (totalOutput / totalDuration) * 1000 : 0,
+      stages: stages.map((s) => ({
+        name: s.name,
+        durationMs: s.durationMs ?? 0,
+        durationPercent:
+          totalDuration > 0
+            ? ((s.durationMs ?? 0) / totalDuration) * 100
+            : 0,
+        inputCount: s.inputCount,
+        outputCount: s.outputCount,
+        errorCount: s.errorCount,
+        errorRate: s.inputCount > 0 ? s.errorCount / s.inputCount : 0,
+        throughputPerSecond:
+          (s.durationMs ?? 0) > 0
+            ? (s.outputCount / (s.durationMs ?? 1)) * 1000
+            : 0,
+        customMetrics: s.customMetrics,
+      })),
+    };
+  }
+}
+
+interface PipelineSummary {
+  totalDurationMs: number;
+  totalInput: number;
+  totalOutput: number;
+  totalErrors: number;
+  errorRate: number;
+  throughputPerSecond: number;
+  stages: Array<{
+    name: string;
+    durationMs: number;
+    durationPercent: number;
+    inputCount: number;
+    outputCount: number;
+    errorCount: number;
+    errorRate: number;
+    throughputPerSecond: number;
+    customMetrics: Record<string, number>;
+  }>;
+}
+```
+
+### Using the Metrics Collector
+
+Wire the collector into your pipeline:
+
+```typescript
+async function monitoredPipeline(records: RawRecord[]): Promise<{
+  data: EnrichedRecord[];
+  metrics: PipelineSummary;
+}> {
+  const metrics = new PipelineMetrics();
+  metrics.startPipeline();
+
+  // Stage 1: Validation
+  metrics.startStage("validation", records.length);
+  const { valid, invalid } = validateRecords(records, RecordSchema);
+  metrics.endStage("validation", valid.length, invalid.length);
+
+  // Stage 2: Cleaning
+  metrics.startStage("cleaning", valid.length);
+  const cleaned = cleanRecords(valid);
+  metrics.endStage("cleaning", cleaned.length);
+
+  // Stage 3: Enrichment
+  metrics.startStage("enrichment", cleaned.length);
+  const enriched = await enrichRecords(cleaned);
+  metrics.endStage("enrichment", enriched.length);
+  metrics.addCustomMetric("enrichment", "apiCalls", enriched.apiCalls);
+
+  // Stage 4: Classification (most expensive stage)
+  metrics.startStage("classification", enriched.data.length);
+  const classified = await classifyRecords(enriched.data);
+  metrics.endStage("classification", classified.length, classified.errors);
+  metrics.addCustomMetric("classification", "cacheHits", classified.cacheHits);
+  metrics.addCustomMetric("classification", "estimatedCost", classified.cost);
+
+  return {
+    data: classified.data,
+    metrics: metrics.getSummary(),
+  };
+}
+```
+
+### Formatting Metrics for Display
+
+Turn raw metrics into a readable report:
+
+```typescript
+function formatMetricsReport(summary: PipelineSummary): string {
+  const lines: string[] = [
+    "Pipeline Execution Report",
+    "=".repeat(50),
+    "",
+    `Total Duration: ${summary.totalDurationMs.toFixed(0)}ms`,
+    `Records In: ${summary.totalInput}`,
+    `Records Out: ${summary.totalOutput}`,
+    `Total Errors: ${summary.totalErrors}`,
+    `Error Rate: ${(summary.errorRate * 100).toFixed(1)}%`,
+    `Throughput: ${summary.throughputPerSecond.toFixed(1)} records/sec`,
+    "",
+    "Stage Breakdown:",
+    "-".repeat(50),
+  ];
+
+  for (const stage of summary.stages) {
+    lines.push(`  ${stage.name}:`);
+    lines.push(`    Duration: ${stage.durationMs.toFixed(0)}ms (${stage.durationPercent.toFixed(1)}%)`);
+    lines.push(`    In/Out: ${stage.inputCount} -> ${stage.outputCount}`);
+    if (stage.errorCount > 0) {
+      lines.push(`    Errors: ${stage.errorCount} (${(stage.errorRate * 100).toFixed(1)}%)`);
+    }
+    lines.push(`    Throughput: ${stage.throughputPerSecond.toFixed(1)} records/sec`);
+
+    for (const [key, value] of Object.entries(stage.customMetrics)) {
+      lines.push(`    ${key}: ${value}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+```
+
+### Error Rate Calculation
+
+Error rate is the most important pipeline health metric:
+
+```typescript
+function calculateErrorMetrics(summary: PipelineSummary) {
+  // Overall error rate
+  const overallErrorRate = summary.errorRate;
+
+  // Per-stage error rates
+  const stageErrors = summary.stages
+    .filter((s) => s.errorRate > 0)
+    .map((s) => ({ stage: s.name, errorRate: s.errorRate }));
+
+  // Find the most problematic stage
+  const worstStage = stageErrors.sort((a, b) => b.errorRate - a.errorRate)[0];
+
+  // Determine health status
+  const health =
+    overallErrorRate === 0
+      ? "healthy"
+      : overallErrorRate < 0.01
+        ? "warning"
+        : "critical";
+
+  return { overallErrorRate, stageErrors, worstStage, health };
+}
+```
+
+### Why This Matters for AI Engineering
+
+Pipeline observability is critical because:
+
+1. **Cost optimization**: Metrics show which stages are slowest and most expensive. The classification stage might take 90% of the time -- that is where you should optimize (better batching, caching, etc.).
+2. **Error detection**: A sudden spike in error rate means something changed (API key expired, data format changed, rate limit hit).
+3. **Capacity planning**: Throughput metrics tell you how many records your pipeline can handle per second, letting you plan for growth.
+4. **SLA compliance**: If your pipeline needs to process 10,000 records in under 5 minutes, metrics tell you whether you are meeting that target.
+
+## Common Mistakes
+
+- **Only measuring total time.** If your pipeline takes 60 seconds, is it the parsing (1s), cleaning (2s), or LLM calls (57s)? Per-stage timing tells you where to optimize.
+- **Not tracking error rates by stage.** A 5% overall error rate might mean 0% validation errors and 50% classification errors. Per-stage rates pinpoint the problem.
+- **Forgetting to measure custom metrics.** API calls, cache hit rates, and estimated costs are domain-specific metrics that matter as much as timing.
+- **Not comparing across runs.** Store metrics from each pipeline run so you can detect trends. Is performance degrading? Are error rates increasing?
+- **Measuring in the wrong units.** Use milliseconds for individual operations and records-per-second for throughput. Mix-ups lead to confusion.
+
+## Your Task
+
+Build a `PipelineMetrics` class that tracks timing, record counts, error counts, and custom metrics per stage. Wire it into a multi-stage pipeline and produce a formatted metrics report showing duration, throughput, error rate, and a per-stage breakdown with percentage of total time.

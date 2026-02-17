@@ -1,0 +1,247 @@
+---
+title: "Partial Composition"
+description: "Registering and using Handlebars partials for reusable template fragments with context passing."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 16
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "partials", "composition", "reusable-fragments", "dynamic-partials"]
+---
+
+## What You'll Learn
+
+You will learn how to register and use Handlebars partials for reusable template fragments, pass custom context to partials, and dynamically select which partial to render at runtime.
+
+## Key Concepts
+
+### What Are Partials?
+
+Partials are reusable template fragments. Think of them as functions for templates -- you define them once and include them wherever you need them. They help you avoid repeating the same template code across multiple templates.
+
+```typescript
+import Handlebars from "handlebars";
+
+// Register a partial
+Handlebars.registerPartial("greeting", "Hello, {{name}}! Welcome aboard.");
+
+// Use it in a template with {{> partialName}}
+const template = Handlebars.compile(`
+{{> greeting}}
+Your account has been created.
+`);
+
+const result = template({ name: "Alice" });
+// "Hello, Alice! Welcome aboard."
+// "Your account has been created."
+```
+
+The `{{> greeting}}` syntax includes the partial at that point in the template. The partial has access to the same context as the surrounding template.
+
+### Partials with More Complex Content
+
+Partials can contain any valid Handlebars syntax -- variables, conditionals, loops, helpers, and even other partials:
+
+```typescript
+Handlebars.registerPartial(
+  "userCard",
+  `
+Name: {{name}}
+Email: {{email}}
+{{#if isPremium}}
+Status: Premium Member
+{{else}}
+Status: Free Tier
+{{/if}}
+`
+);
+
+const template = Handlebars.compile(`
+User Details:
+{{> userCard}}
+---
+Thank you for being a member.
+`);
+
+const result = template({
+  name: "Bob",
+  email: "bob@example.com",
+  isPremium: true,
+});
+```
+
+### Passing Custom Context to Partials
+
+By default, a partial inherits the current context. But you can pass a specific object as the partial's context:
+
+```typescript
+Handlebars.registerPartial(
+  "modelInfo",
+  "Model: {{name}} | Provider: {{provider}} | Max Tokens: {{maxTokens}}"
+);
+
+const template = Handlebars.compile(`
+Primary:
+{{> modelInfo primary}}
+
+Fallback:
+{{> modelInfo fallback}}
+`);
+
+const result = template({
+  primary: { name: "gpt-4", provider: "OpenAI", maxTokens: 8192 },
+  fallback: { name: "gpt-3.5-turbo", provider: "OpenAI", maxTokens: 4096 },
+});
+// "Primary:"
+// "Model: gpt-4 | Provider: OpenAI | Max Tokens: 8192"
+// ""
+// "Fallback:"
+// "Model: gpt-3.5-turbo | Provider: OpenAI | Max Tokens: 4096"
+```
+
+The `{{> modelInfo primary}}` syntax passes the `primary` object as the context for the partial. Inside the partial, `{{name}}` resolves to `primary.name`.
+
+### Passing Hash Parameters to Partials
+
+You can also pass individual values to a partial using hash parameters:
+
+```typescript
+Handlebars.registerPartial(
+  "badge",
+  "[{{level}}] {{label}}"
+);
+
+const template = Handlebars.compile(`
+{{> badge level="INFO" label=message}}
+{{> badge level="ERROR" label=errorMessage}}
+`);
+
+const result = template({
+  message: "System started successfully",
+  errorMessage: "Connection timeout",
+});
+// "[INFO] System started successfully"
+// "[ERROR] Connection timeout"
+```
+
+Hash parameters override values from the inherited context. This lets you customize partial behavior at each call site.
+
+### Dynamic Partial Selection
+
+Handlebars supports dynamic partials using the `(lookup ...)` helper or a variable inside the partial syntax:
+
+```typescript
+Handlebars.registerPartial("format-json", "```json\n{{content}}\n```");
+Handlebars.registerPartial("format-text", "{{content}}");
+Handlebars.registerPartial("format-markdown", "**{{content}}**");
+
+const template = Handlebars.compile(`
+Output:
+{{> (lookup . "outputFormat") }}
+`);
+
+const result = template({
+  outputFormat: "format-json",
+  content: '{"status": "ok"}',
+});
+// "Output:"
+// "```json"
+// '{"status": "ok"}'
+// "```"
+```
+
+The `(lookup . "outputFormat")` evaluates to the string `"format-json"`, and Handlebars uses that string to find the registered partial. This enables runtime format selection.
+
+### Partials Inside Loops
+
+Partials are especially useful inside `{{#each}}` blocks to keep loop bodies clean:
+
+```typescript
+Handlebars.registerPartial(
+  "taskRow",
+  "[{{#if completed}}x{{else}} {{/if}}] {{title}} ({{assignee}})"
+);
+
+const template = Handlebars.compile(`
+Task List:
+{{#each tasks}}
+{{> taskRow}}
+{{/each}}
+`);
+
+const result = template({
+  tasks: [
+    { title: "Design API", assignee: "Alice", completed: true },
+    { title: "Write tests", assignee: "Bob", completed: false },
+    { title: "Deploy", assignee: "Carol", completed: false },
+  ],
+});
+```
+
+Inside the `{{#each}}` block, the context is the current task object. The partial renders with that context automatically.
+
+### Partials in AI Engineering
+
+Partials are perfect for building modular prompt libraries:
+
+```typescript
+// Register reusable prompt sections
+Handlebars.registerPartial(
+  "systemRole",
+  "You are a {{role}} assistant specialized in {{domain}}."
+);
+
+Handlebars.registerPartial(
+  "outputFormat",
+  `Respond in the following format:
+{{#each formatFields}}
+- {{this}}
+{{/each}}`
+);
+
+Handlebars.registerPartial(
+  "fewShotExample",
+  `Input: {{input}}
+Output: {{output}}`
+);
+
+// Compose them into a full prompt template
+const template = Handlebars.compile(`
+{{> systemRole}}
+
+{{> outputFormat}}
+
+Examples:
+{{#each examples}}
+{{> fewShotExample}}
+
+{{/each}}
+Now process this input:
+Input: {{userInput}}
+Output:
+`);
+
+const prompt = template({
+  role: "data extraction",
+  domain: "financial documents",
+  formatFields: ["company_name", "revenue", "fiscal_year"],
+  examples: [
+    { input: "Acme Corp reported $5M in 2023", output: "company_name: Acme Corp, revenue: $5M, fiscal_year: 2023" },
+  ],
+  userInput: "TechCo had revenue of $12M for fiscal year 2024",
+});
+```
+
+Each partial is independently maintained and tested. Changing the output format partial updates every prompt that uses it.
+
+## Common Mistakes
+
+- **Forgetting the `>` in the partial syntax.** `{{greeting}}` looks up a variable. `{{> greeting}}` includes a partial. The `>` symbol is required.
+- **Not registering the partial before compiling the template.** If a partial is not registered when the template is compiled, Handlebars throws an error. Register all partials before calling `Handlebars.compile()`.
+- **Context confusion with partial calls.** When you write `{{> partialName someObject}}`, the partial's context becomes `someObject`. If you omit the context argument, the partial inherits the current context. Be explicit about which context a partial receives.
+- **Circular partial references.** If partial A includes partial B and partial B includes partial A, you get infinite recursion. Handlebars does not detect this at compile time -- it crashes at render time.
+
+## Your Task
+
+Register at least three partials that represent reusable template sections. Create a main template that includes all three partials, demonstrating both default context inheritance and custom context passing. Use at least one partial inside an `{{#each}}` loop.

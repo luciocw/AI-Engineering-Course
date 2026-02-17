@@ -1,0 +1,356 @@
+---
+title: "Report Templates"
+description: "Learn to generate rich reports by combining Handlebars templates with data pipeline output, supporting multiple output formats."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 18
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "reports", "handlebars", "templates", "formatting", "multi-format"]
+---
+
+## What You'll Learn
+
+You will learn to build a full report generation system that combines data pipeline output with Handlebars templates. You will create templates for different report types, support multiple output formats (Markdown, HTML, plain text), and build a report engine that stakeholders can actually use. This deepens the cross-module integration between Module 1 (Handlebars) and Module 4 (Pipelines).
+
+## Key Concepts
+
+### From Pipeline to Report
+
+In Exercise 10, you generated a simple report with Handlebars. Now you will build a proper report generation system with reusable templates, multiple formats, and rich formatting. The architecture:
+
+1. **Data pipeline** produces a structured report context (data + computed metrics)
+2. **Report template** defines the layout for a specific report type
+3. **Report engine** combines context with template and produces the final output
+4. **Format adapters** convert the output to the desired format
+
+### Designing Report Context
+
+A report context is a carefully structured object that contains everything the template needs:
+
+```typescript
+interface ReportContext {
+  meta: {
+    title: string;
+    subtitle?: string;
+    generatedAt: string;
+    generatedBy: string;
+    period?: { start: string; end: string };
+  };
+  summary: {
+    totalRecords: number;
+    keyMetrics: Array<{ label: string; value: string; trend?: "up" | "down" | "flat" }>;
+  };
+  sections: Array<{
+    title: string;
+    data: Record<string, unknown>[];
+    columns: Array<{ key: string; label: string; align?: "left" | "right" | "center" }>;
+  }>;
+  alerts?: Array<{
+    severity: "info" | "warning" | "critical";
+    message: string;
+  }>;
+  footer?: string;
+}
+
+function buildReportContext(pipelineOutput: PipelineOutput): ReportContext {
+  const { data, metrics } = pipelineOutput;
+
+  const byRegion = groupBy(data, "region");
+  const totalRevenue = data.reduce((sum, r) => sum + r.revenue, 0);
+  const avgOrderSize = totalRevenue / data.length;
+
+  return {
+    meta: {
+      title: "Sales Performance Report",
+      subtitle: "Monthly Summary",
+      generatedAt: new Date().toISOString(),
+      generatedBy: "AI Data Pipeline v1.0",
+      period: { start: "2024-01-01", end: "2024-01-31" },
+    },
+    summary: {
+      totalRecords: data.length,
+      keyMetrics: [
+        { label: "Total Revenue", value: `$${totalRevenue.toLocaleString()}`, trend: "up" },
+        { label: "Avg Order Size", value: `$${avgOrderSize.toFixed(2)}`, trend: "flat" },
+        { label: "Error Rate", value: `${(metrics.errorRate * 100).toFixed(1)}%`, trend: "down" },
+      ],
+    },
+    sections: Object.entries(byRegion).map(([region, records]) => ({
+      title: `${region} Region`,
+      data: records,
+      columns: [
+        { key: "product", label: "Product", align: "left" },
+        { key: "quantity", label: "Units", align: "right" },
+        { key: "revenue", label: "Revenue", align: "right" },
+      ],
+    })),
+    alerts: metrics.errorRate > 0.05
+      ? [{ severity: "warning", message: `Error rate ${(metrics.errorRate * 100).toFixed(1)}% exceeds 5% threshold` }]
+      : [],
+  };
+}
+```
+
+### Building Report Templates
+
+Create templates for different report types. Each template focuses on layout, not logic:
+
+```typescript
+import Handlebars from "handlebars";
+
+// Register formatting helpers once
+function registerReportHelpers(): void {
+  Handlebars.registerHelper("currency", (value: number) =>
+    new Handlebars.SafeString(`$${value.toLocaleString()}`)
+  );
+
+  Handlebars.registerHelper("trendIcon", (trend: string) => {
+    const icons: Record<string, string> = { up: "^", down: "v", flat: "-" };
+    return new Handlebars.SafeString(icons[trend] ?? "");
+  });
+
+  Handlebars.registerHelper("severityTag", (severity: string) => {
+    const tags: Record<string, string> = {
+      info: "[INFO]",
+      warning: "[WARNING]",
+      critical: "[CRITICAL]",
+    };
+    return new Handlebars.SafeString(tags[severity] ?? "[UNKNOWN]");
+  });
+
+  Handlebars.registerHelper("repeat", (n: number, block: any) => {
+    let result = "";
+    for (let i = 0; i < n; i++) {
+      result += block.fn(i);
+    }
+    return result;
+  });
+
+  Handlebars.registerHelper("padRight", (str: string, len: number) => {
+    return new Handlebars.SafeString(String(str).padEnd(len));
+  });
+}
+
+// Markdown report template
+const MARKDOWN_TEMPLATE = `# {{meta.title}}
+{{#if meta.subtitle}}*{{meta.subtitle}}*{{/if}}
+
+Generated: {{meta.generatedAt}}
+By: {{meta.generatedBy}}
+{{#if meta.period}}Period: {{meta.period.start}} to {{meta.period.end}}{{/if}}
+
+---
+
+## Summary
+
+| Metric | Value | Trend |
+|--------|-------|-------|
+{{#each summary.keyMetrics}}
+| {{this.label}} | {{this.value}} | {{trendIcon this.trend}} |
+{{/each}}
+
+Total Records: **{{summary.totalRecords}}**
+
+{{#if alerts.length}}
+## Alerts
+
+{{#each alerts}}
+> {{severityTag this.severity}} {{this.message}}
+
+{{/each}}
+{{/if}}
+
+{{#each sections}}
+## {{this.title}}
+
+| {{#each this.columns}}{{this.label}} | {{/each}}
+| {{#each this.columns}}--- | {{/each}}
+{{#each this.data}}
+| {{#each ../columns}}{{lookup .. this.key}} | {{/each}}
+{{/each}}
+
+{{/each}}
+
+{{#if footer}}
+---
+*{{footer}}*
+{{/if}}`;
+```
+
+### The Report Engine
+
+A report engine manages templates and produces reports:
+
+```typescript
+interface ReportTemplate {
+  id: string;
+  name: string;
+  format: "markdown" | "html" | "text";
+  template: string;
+}
+
+class ReportEngine {
+  private templates: Map<string, HandlebarsTemplateDelegate> = new Map();
+  private helpersRegistered = false;
+
+  constructor() {
+    this.registerHelpers();
+  }
+
+  private registerHelpers(): void {
+    if (this.helpersRegistered) return;
+    registerReportHelpers();
+    this.helpersRegistered = true;
+  }
+
+  registerTemplate(config: ReportTemplate): void {
+    const compiled = Handlebars.compile(config.template);
+    this.templates.set(config.id, compiled);
+  }
+
+  generate(
+    templateId: string,
+    context: ReportContext
+  ): string {
+    const template = this.templates.get(templateId);
+    if (!template) {
+      throw new Error(
+        `Template "${templateId}" not found. Available: ${Array.from(this.templates.keys()).join(", ")}`
+      );
+    }
+
+    return template(context);
+  }
+
+  // Generate the same report in multiple formats
+  generateAll(
+    templateIds: string[],
+    context: ReportContext
+  ): Map<string, string> {
+    const results = new Map<string, string>();
+    for (const id of templateIds) {
+      results.set(id, this.generate(id, context));
+    }
+    return results;
+  }
+}
+```
+
+### HTML Report Template
+
+For web-based reports, use an HTML template:
+
+```typescript
+const HTML_TEMPLATE = `<!DOCTYPE html>
+<html>
+<head>
+  <title>{{meta.title}}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f5f5f5; }
+    .alert-warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin: 8px 0; }
+    .alert-critical { background: #f8d7da; border-left: 4px solid #dc3545; padding: 12px; margin: 8px 0; }
+    .metric { display: inline-block; padding: 16px; margin: 8px; border: 1px solid #ddd; border-radius: 8px; }
+    .metric-value { font-size: 24px; font-weight: bold; }
+    .metric-label { color: #666; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>{{meta.title}}</h1>
+  {{#if meta.subtitle}}<p>{{meta.subtitle}}</p>{{/if}}
+
+  <div class="metrics">
+    {{#each summary.keyMetrics}}
+    <div class="metric">
+      <div class="metric-value">{{this.value}}</div>
+      <div class="metric-label">{{this.label}}</div>
+    </div>
+    {{/each}}
+  </div>
+
+  {{#each alerts}}
+  <div class="alert-{{this.severity}}">
+    <strong>{{severityTag this.severity}}</strong> {{this.message}}
+  </div>
+  {{/each}}
+
+  {{#each sections}}
+  <h2>{{this.title}}</h2>
+  <table>
+    <thead>
+      <tr>{{#each this.columns}}<th>{{this.label}}</th>{{/each}}</tr>
+    </thead>
+    <tbody>
+      {{#each this.data}}
+      <tr>{{#each ../columns}}<td>{{lookup .. this.key}}</td>{{/each}}</tr>
+      {{/each}}
+    </tbody>
+  </table>
+  {{/each}}
+
+  <footer>
+    <p>Generated: {{meta.generatedAt}} | By: {{meta.generatedBy}}</p>
+  </footer>
+</body>
+</html>`;
+```
+
+### Complete Pipeline-to-Report Flow
+
+```typescript
+async function generateSalesReport(csvPath: string): Promise<{
+  markdown: string;
+  html: string;
+}> {
+  // Step 1: Run the data pipeline
+  const pipelineOutput = await salesPipeline(csvPath);
+
+  // Step 2: Build report context
+  const context = buildReportContext(pipelineOutput);
+
+  // Step 3: Generate reports
+  const engine = new ReportEngine();
+  engine.registerTemplate({
+    id: "sales-md",
+    name: "Sales Report (Markdown)",
+    format: "markdown",
+    template: MARKDOWN_TEMPLATE,
+  });
+  engine.registerTemplate({
+    id: "sales-html",
+    name: "Sales Report (HTML)",
+    format: "html",
+    template: HTML_TEMPLATE,
+  });
+
+  return {
+    markdown: engine.generate("sales-md", context),
+    html: engine.generate("sales-html", context),
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+Report generation bridges the gap between AI processing and human understanding:
+
+1. **Stakeholder communication**: Non-technical stakeholders need formatted reports, not JSON blobs
+2. **LLM prompt context**: A well-formatted report can be included in an LLM prompt for further analysis or Q&A
+3. **Audit trails**: Reports document what the pipeline processed, found, and flagged
+4. **Multi-channel delivery**: The same data can produce Markdown for Slack, HTML for email, and plain text for logging
+
+## Common Mistakes
+
+- **Putting business logic in templates.** Templates should format and display, not compute. Do all calculations in the report context builder.
+- **Not handling missing data.** Use `{{#if}}` guards for optional fields. An undefined value renders as empty string, but a missing nested object causes an error.
+- **Forgetting to register helpers before generating.** Helpers must be registered before `Handlebars.compile` is called. Register them once at startup.
+- **Not testing with edge cases.** Test with zero records, one record, and records with special characters (quotes, ampersands, angle brackets).
+- **Hardcoding report structure.** Use the `sections` array pattern so the same template handles reports with 1 section or 20 sections.
+
+## Your Task
+
+Build a report engine that takes data pipeline output, constructs a report context with metadata, summary metrics, sectioned data, and alerts. Register both Markdown and HTML templates. Generate both report formats from the same data and verify the output is correctly formatted.

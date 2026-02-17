@@ -1,0 +1,192 @@
+---
+title: "Conditionals"
+description: "Using if/else blocks and unless for conditional rendering, and understanding Handlebars falsy values."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 5
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "conditionals", "if-else", "unless", "falsy-values"]
+---
+
+## What You'll Learn
+
+You will learn how to use `{{#if}}`, `{{else}}`, and `{{#unless}}` blocks to conditionally include or exclude sections of a template, and understand exactly which values Handlebars treats as falsy.
+
+## Key Concepts
+
+### The `{{#if}}` Block
+
+The `{{#if}}` block lets you render content only when a value is truthy. It uses a block syntax with an opening tag and a closing tag:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(
+  `{{#if isPremium}}Welcome, Premium member!{{/if}}`
+);
+
+console.log(template({ isPremium: true }));
+// "Welcome, Premium member!"
+
+console.log(template({ isPremium: false }));
+// ""
+```
+
+When `isPremium` is truthy, the content between `{{#if isPremium}}` and `{{/if}}` is rendered. When it is falsy, the entire block is skipped and produces nothing.
+
+### Adding `{{else}}`
+
+You can provide alternative content when the condition is false:
+
+```typescript
+const template = Handlebars.compile(
+  `{{#if isLoggedIn}}Welcome back, {{name}}!{{else}}Please log in to continue.{{/if}}`
+);
+
+console.log(template({ isLoggedIn: true, name: "Alice" }));
+// "Welcome back, Alice!"
+
+console.log(template({ isLoggedIn: false }));
+// "Please log in to continue."
+```
+
+The `{{else}}` clause is optional. If you omit it, a falsy condition simply produces an empty string.
+
+### Multi-Line Conditionals
+
+For readability, you will usually write conditionals across multiple lines:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if hasResults}}
+Here are your search results:
+Found {{resultCount}} matches.
+{{else}}
+No results found. Try a different search term.
+{{/if}}
+`);
+```
+
+The whitespace and newlines inside the blocks are preserved in the output, so plan your formatting accordingly.
+
+### The `{{#unless}}` Block
+
+`{{#unless}}` is the inverse of `{{#if}}`. It renders content only when the value is **falsy**:
+
+```typescript
+const template = Handlebars.compile(
+  `{{#unless hasErrors}}All checks passed!{{/unless}}`
+);
+
+console.log(template({ hasErrors: false }));
+// "All checks passed!"
+
+console.log(template({ hasErrors: true }));
+// ""
+```
+
+Think of `{{#unless}}` as "if NOT." It can also have an `{{else}}` clause:
+
+```typescript
+const template = Handlebars.compile(`
+{{#unless isBlocked}}
+You have access to this resource.
+{{else}}
+Access denied. Contact your administrator.
+{{/unless}}
+`);
+```
+
+### Falsy Values in Handlebars
+
+This is crucial to understand. Handlebars has its own definition of "falsy" that differs slightly from JavaScript. The following values are considered falsy by `{{#if}}`:
+
+- `false` (boolean false)
+- `undefined` (property does not exist)
+- `null`
+- `""` (empty string)
+- `0` (the number zero)
+- `[]` (empty array)
+
+```typescript
+const template = Handlebars.compile(
+  `{{#if value}}truthy{{else}}falsy{{/if}}`
+);
+
+console.log(template({ value: false }));     // "falsy"
+console.log(template({ value: undefined })); // "falsy"
+console.log(template({ value: null }));      // "falsy"
+console.log(template({ value: "" }));        // "falsy"
+console.log(template({ value: 0 }));         // "falsy"
+console.log(template({ value: [] }));        // "falsy"
+
+console.log(template({ value: true }));      // "truthy"
+console.log(template({ value: "hello" }));   // "truthy"
+console.log(template({ value: 1 }));         // "truthy"
+console.log(template({ value: [1, 2] }));    // "truthy"
+console.log(template({ value: {} }));        // "truthy"
+```
+
+Pay special attention to the **empty array** `[]`. In JavaScript, `[]` is truthy (it is an object). In Handlebars, `[]` is falsy. This is actually helpful: you can use `{{#if items}}` to check whether a list has any elements.
+
+### Conditionals in AI Engineering
+
+Conditionals are essential for building adaptive prompts. Different scenarios require different instructions:
+
+```typescript
+const promptTemplate = Handlebars.compile(`
+You are a {{role}} assistant.
+
+{{#if systemContext}}
+Additional context: {{systemContext}}
+{{/if}}
+
+{{#if useFormality}}
+Respond in a formal, professional tone.
+{{else}}
+Respond in a casual, friendly tone.
+{{/if}}
+
+{{#unless allowCodeExamples}}
+Do not include code examples in your response.
+{{/unless}}
+
+User question: {{question}}
+`);
+
+const prompt = promptTemplate({
+  role: "technical support",
+  systemContext: "The user is on a paid Enterprise plan.",
+  useFormality: true,
+  allowCodeExamples: false,
+  question: "How do I reset my API key?",
+});
+```
+
+This prompt adapts based on flags. A premium user gets extra context; a formal setting changes the tone instruction; a flag controls whether code examples are allowed. One template handles many scenarios.
+
+### Important: `{{#if}}` Does Not Support Expressions
+
+A common source of confusion: Handlebars `{{#if}}` only checks whether a single value is truthy. It does **not** support comparison expressions:
+
+```typescript
+// THIS DOES NOT WORK in Handlebars:
+// {{#if score > 90}}   <-- syntax error
+// {{#if name === "Alice"}}   <-- syntax error
+// {{#if a && b}}   <-- syntax error
+```
+
+If you need comparisons, you will need to use helpers (covered in later exercises) or compute the boolean value before passing it to the template.
+
+## Common Mistakes
+
+- **Trying to use comparison operators in `{{#if}}`.** Handlebars conditionals only test truthiness. They cannot compare values. `{{#if score > 90}}` is a syntax error. You will learn how to work around this with helpers in Exercise 13.
+- **Forgetting that `0` is falsy.** If your template displays a count with `{{#if count}}`, a count of zero will hide the section. This might not be what you want.
+- **Forgetting that empty arrays are falsy.** Unlike JavaScript, `{{#if emptyArray}}` evaluates to false for `[]`. This is usually helpful but can surprise you if you expect JavaScript behavior.
+- **Mismatching block tags.** Every `{{#if}}` must have a matching `{{/if}}`. Every `{{#unless}}` must have a matching `{{/unless}}`. Mismatched tags cause compile errors.
+
+## Your Task
+
+Build a template that uses `{{#if}}`, `{{else}}`, and `{{#unless}}` to conditionally render different sections. Test it with various falsy values (empty string, zero, null, false, empty array) to confirm you understand how Handlebars evaluates truthiness.

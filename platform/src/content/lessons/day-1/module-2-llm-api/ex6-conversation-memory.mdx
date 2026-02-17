@@ -1,0 +1,368 @@
+---
+title: "Conversation Memory: Managing Context Windows"
+description: "Learn about context window limits, summarization strategies, sliding window approaches, and when to summarize vs truncate."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 6
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["llm", "api", "conversation", "memory", "context-window", "summarization", "sliding-window"]
+---
+
+## What You'll Learn
+
+- What context windows are and why they have limits
+- How to implement a sliding window strategy
+- How to summarize past conversation for memory compression
+- When to use truncation vs summarization
+- Building a production-ready memory manager
+
+## Key Concepts
+
+### The Context Window Problem
+
+Every LLM has a maximum number of tokens it can process in a single request. This is the "context window." When your conversation history exceeds this limit, your API call will fail.
+
+```typescript
+// Typical context window sizes (as of 2024-2025)
+const CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-haiku-3-5": 200_000,
+  "claude-sonnet-4-20250514": 200_000,
+  "gpt-4o": 128_000,
+  "gpt-4o-mini": 128_000,
+};
+```
+
+Even with large context windows, you usually want to manage memory well before hitting the limit. Sending 100K tokens per request is slow and expensive. In practice, you want to keep conversations focused and compact.
+
+### Why Not Just Use the Full Window?
+
+Three reasons to manage conversation length proactively:
+
+```typescript
+// 1. COST: Input tokens are resent every turn
+// A 50-turn conversation with 200 tokens per message:
+// Turn 1: 200 tokens
+// Turn 2: 600 tokens (200 + 200 + 200)
+// Turn 50: 20,000 tokens
+// Total across all turns: ~500,000 input tokens
+// That is 250x more than one turn!
+
+// 2. LATENCY: More input tokens = slower responses
+// Rough estimates for time-to-first-token:
+// 1K tokens input: ~500ms
+// 10K tokens input: ~1-2s
+// 100K tokens input: ~5-10s
+
+// 3. QUALITY: Models can lose focus in very long contexts
+// Important instructions can get "buried" in long histories
+// The model may repeat earlier points or lose track of the current topic
+```
+
+### Strategy 1: Sliding Window
+
+The simplest approach -- keep only the most recent N messages:
+
+```typescript
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+}
+
+class SlidingWindowMemory {
+  private messages: Message[] = [];
+  private maxMessages: number;
+
+  constructor(maxMessages: number = 20) {
+    this.maxMessages = maxMessages;
+  }
+
+  addMessage(message: Message): void {
+    this.messages.push(message);
+
+    // Trim from the front, keeping only recent messages
+    if (this.messages.length > this.maxMessages) {
+      // Always remove in pairs to maintain alternation
+      const excess = this.messages.length - this.maxMessages;
+      const trimCount = excess % 2 === 0 ? excess : excess + 1;
+      this.messages = this.messages.slice(trimCount);
+    }
+  }
+
+  getMessages(): Message[] {
+    return [...this.messages];
+  }
+
+  getTokenEstimate(): number {
+    return this.messages.reduce(
+      (sum, m) => sum + Math.ceil(m.content.length / 4),
+      0
+    );
+  }
+}
+```
+
+**Pros**: Simple, predictable cost, fast.
+**Cons**: Old context is completely lost. If the user refers to something from 25 messages ago, the model will not know what they mean.
+
+### Strategy 2: Token-Based Window
+
+Instead of counting messages, count tokens:
+
+```typescript
+class TokenWindowMemory {
+  private messages: Message[] = [];
+  private maxTokens: number;
+
+  constructor(maxTokens: number = 4000) {
+    this.maxTokens = maxTokens;
+  }
+
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  private getTotalTokens(): number {
+    return this.messages.reduce(
+      (sum, m) => sum + this.estimateTokens(m.content),
+      0
+    );
+  }
+
+  addMessage(message: Message): void {
+    this.messages.push(message);
+
+    // Remove oldest message pairs until under limit
+    while (
+      this.getTotalTokens() > this.maxTokens &&
+      this.messages.length > 2
+    ) {
+      // Remove the oldest user-assistant pair
+      this.messages.splice(0, 2);
+    }
+  }
+
+  getMessages(): Message[] {
+    return [...this.messages];
+  }
+}
+```
+
+This is better than counting messages because a single long message and a short message are treated differently.
+
+### Strategy 3: Summarization
+
+The most sophisticated approach -- compress old messages into a summary:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+class SummarizingMemory {
+  private client: Anthropic;
+  private messages: Message[] = [];
+  private summary: string = "";
+  private maxMessages: number;
+  private summarizeThreshold: number;
+
+  constructor(config: {
+    maxMessages?: number;
+    summarizeThreshold?: number;
+  }) {
+    this.client = new Anthropic();
+    this.maxMessages = config.maxMessages ?? 10;
+    this.summarizeThreshold = config.summarizeThreshold ?? 15;
+  }
+
+  async addMessage(message: Message): Promise<void> {
+    this.messages.push(message);
+
+    if (this.messages.length >= this.summarizeThreshold) {
+      await this.compress();
+    }
+  }
+
+  private async compress(): Promise<void> {
+    // Take the older messages to summarize
+    const toSummarize = this.messages.slice(
+      0,
+      this.messages.length - this.maxMessages
+    );
+    const toKeep = this.messages.slice(
+      this.messages.length - this.maxMessages
+    );
+
+    // Build a summary of the older messages
+    const conversationText = toSummarize
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    const summaryResponse = await this.client.messages.create({
+      model: "claude-haiku-3-5", // Use a cheap model for summarization
+      max_tokens: 300,
+      messages: [
+        {
+          role: "user",
+          content: `Summarize this conversation, preserving key facts, decisions, and context that would be needed to continue the conversation naturally:
+
+${this.summary ? `Previous summary: ${this.summary}\n\n` : ""}New messages to summarize:
+${conversationText}
+
+Provide a concise summary in 2-4 sentences.`,
+        },
+      ],
+    });
+
+    this.summary =
+      summaryResponse.content[0].type === "text"
+        ? summaryResponse.content[0].text
+        : "";
+    this.messages = toKeep;
+  }
+
+  getMessages(): Message[] {
+    return [...this.messages];
+  }
+
+  getSystemContext(): string {
+    if (!this.summary) return "";
+    return `Previous conversation summary: ${this.summary}`;
+  }
+}
+```
+
+Usage with the API:
+
+```typescript
+const memory = new SummarizingMemory({
+  maxMessages: 10,
+  summarizeThreshold: 15,
+});
+
+async function chat(userInput: string): Promise<string> {
+  await memory.addMessage({ role: "user", content: userInput });
+
+  const systemContext = memory.getSystemContext();
+  const systemPrompt = `You are a helpful assistant.${
+    systemContext ? `\n\n${systemContext}` : ""
+  }`;
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: memory.getMessages(),
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+  await memory.addMessage({ role: "assistant", content: text });
+
+  return text;
+}
+```
+
+### When to Summarize vs Truncate
+
+Here is a decision framework:
+
+```typescript
+type MemoryStrategy = "sliding_window" | "token_window" | "summarization";
+
+function chooseStrategy(useCase: {
+  requiresLongTermContext: boolean;
+  costSensitive: boolean;
+  latencySensitive: boolean;
+}): MemoryStrategy {
+  // Customer support chat: context matters, but cost is important
+  // -> summarization
+
+  // Quick Q&A bot: no long-term context needed
+  // -> sliding_window
+
+  // Code assistant: recent context is most important, latency matters
+  // -> token_window
+
+  if (useCase.requiresLongTermContext) {
+    return "summarization";
+  }
+  if (useCase.latencySensitive) {
+    return "sliding_window";
+  }
+  return "token_window";
+}
+```
+
+| Strategy | Preserves Old Context | Cost | Complexity |
+|----------|----------------------|------|------------|
+| Sliding Window | No | Low | Simple |
+| Token Window | No | Low | Simple |
+| Summarization | Partially | Medium (extra API calls) | Moderate |
+
+### Hybrid Approach
+
+The best production systems combine strategies:
+
+```typescript
+class HybridMemory {
+  private recentMessages: Message[] = [];
+  private summary: string = "";
+  private pinnedFacts: string[] = []; // Key facts to always include
+  private maxRecentMessages = 10;
+  private maxTokens = 4000;
+
+  // Pin important facts that should never be forgotten
+  pinFact(fact: string): void {
+    this.pinnedFacts.push(fact);
+  }
+
+  buildContext(): {
+    system: string;
+    messages: Message[];
+  } {
+    let systemContext = "";
+
+    if (this.pinnedFacts.length > 0) {
+      systemContext += `Key facts:\n${this.pinnedFacts.map((f) => `- ${f}`).join("\n")}\n\n`;
+    }
+
+    if (this.summary) {
+      systemContext += `Conversation history: ${this.summary}`;
+    }
+
+    return {
+      system: systemContext,
+      messages: this.recentMessages.slice(-this.maxRecentMessages),
+    };
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Ignoring context limits until they crash**: Do not wait for an API error to handle long conversations. Build memory management from the start.
+
+2. **Summarizing too aggressively**: If you summarize after every 3 messages, you lose nuance quickly. Find the right threshold for your use case -- usually 10-20 messages before compressing.
+
+3. **Using the expensive model for summarization**: Summarization is a simple task. Use the cheapest available model (like Haiku) to compress conversation history.
+
+4. **Breaking role alternation during trimming**: When you remove old messages, always remove in user/assistant pairs. Removing a single message breaks the alternation rule and causes API errors.
+
+5. **Not including the summary in the system prompt**: A summary only works if the model can see it. Include it in the system prompt so it serves as background context for the recent messages.
+
+## Your Task
+
+Build a `ConversationMemory` class that supports multiple strategies:
+
+1. Implement `SlidingWindowMemory` that keeps the last N message pairs
+2. Implement `SummarizingMemory` that compresses older messages using a cheap model
+3. Both should maintain proper role alternation at all times
+4. Track token estimates and log when compression occurs
+5. Build a chat loop that uses `SummarizingMemory` and demonstrates that the model retains knowledge from summarized turns
+
+Test scenario:
+- Have a 15+ turn conversation where you establish a fact in turn 2 (e.g., "My name is Alex")
+- Continue chatting until the original message is summarized
+- Ask the model about that fact and verify it still knows it from the summary
+
+Bonus: Implement the hybrid approach with pinned facts.

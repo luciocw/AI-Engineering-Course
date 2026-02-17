@@ -1,0 +1,390 @@
+---
+title: "Robust Error Handling for Tools"
+description: "Implement retry logic, timeouts, graceful degradation, dead-letter patterns, and proper error reporting back to the LLM."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 14
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["tools", "function-calling", "error-handling", "retry", "timeout", "resilience", "advanced"]
+---
+
+## What You'll Learn
+
+- Retry logic with exponential backoff for transient failures
+- Timeouts to prevent hanging tool calls
+- Graceful degradation when tools fail
+- Dead-letter patterns for capturing and replaying failed calls
+- How to report errors back to the LLM so it can help the user
+
+## Key Concepts
+
+### Why Error Handling Matters for Tools
+
+Tool handlers call external services that can fail in many ways:
+- Network timeouts
+- Rate limiting (429 errors)
+- Server errors (500s)
+- Invalid responses
+- Authentication failures
+
+Without proper error handling, a single failed API call crashes your entire application. With it, the LLM can gracefully tell the user what happened and suggest alternatives.
+
+### Retry Logic with Exponential Backoff
+
+Transient errors (network glitches, rate limits) often succeed on retry:
+
+```typescript
+interface RetryOptions {
+  maxRetries: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  retryableErrors: (error: Error) => boolean;
+}
+
+const defaultRetryOptions: RetryOptions = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+  retryableErrors: (error) => {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("timeout") ||
+      message.includes("rate limit") ||
+      message.includes("429") ||
+      message.includes("503") ||
+      message.includes("network")
+    );
+  },
+};
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: RetryOptions = defaultRetryOptions
+): Promise<T> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (attempt === options.maxRetries || !options.retryableErrors(lastError)) {
+        throw lastError;
+      }
+
+      // Exponential backoff with jitter
+      const delay = Math.min(
+        options.baseDelayMs * Math.pow(2, attempt) + Math.random() * 1000,
+        options.maxDelayMs
+      );
+
+      console.log(
+        `Retry ${attempt + 1}/${options.maxRetries} for error: ${lastError.message}. ` +
+          `Waiting ${Math.round(delay)}ms`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+```
+
+### Timeouts
+
+Prevent tool calls from hanging indefinitely:
+
+```typescript
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  toolName: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Tool "${toolName}" timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+// Using with AbortController for fetch calls
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = 10000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+```
+
+### Graceful Degradation
+
+When a tool fails, provide the best possible response instead of nothing:
+
+```typescript
+interface ToolResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+  fallback?: string;
+}
+
+async function executeToolWithFallback(
+  name: string,
+  input: Record<string, unknown>
+): Promise<string> {
+  try {
+    const result = await withRetry(
+      () => withTimeout(executeTool(name, input), 15000, name)
+    );
+    return result;
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+
+    // Provide degraded but useful responses
+    const fallbacks: Record<string, (input: Record<string, unknown>) => string> = {
+      get_weather: (input) =>
+        JSON.stringify({
+          error: `Unable to fetch weather for ${input.city}`,
+          suggestion: "The weather service is temporarily unavailable. " +
+            "You can check weather.com directly.",
+          cached_data: getCachedWeather(input.city as string), // try cache
+        }),
+
+      search_products: (input) =>
+        JSON.stringify({
+          error: `Search unavailable for "${input.query}"`,
+          suggestion: "The product search is down. You can browse by " +
+            "category at /products or try again in a few minutes.",
+        }),
+
+      default: () =>
+        JSON.stringify({
+          error: `Tool "${name}" failed: ${errorMessage}`,
+          suggestion: "Please try again in a moment.",
+        }),
+    };
+
+    const fallbackFn = fallbacks[name] || fallbacks.default;
+    return fallbackFn(input);
+  }
+}
+```
+
+### Dead-Letter Pattern
+
+Capture failed tool calls for later debugging or replay:
+
+```typescript
+interface DeadLetter {
+  timestamp: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  error: string;
+  attempts: number;
+  conversationId: string;
+}
+
+class DeadLetterQueue {
+  private queue: DeadLetter[] = [];
+
+  add(letter: DeadLetter): void {
+    this.queue.push(letter);
+    console.error(
+      `Dead letter: ${letter.toolName} failed after ${letter.attempts} attempts: ${letter.error}`
+    );
+  }
+
+  getAll(): DeadLetter[] {
+    return [...this.queue];
+  }
+
+  async replay(
+    executeTool: (name: string, input: Record<string, unknown>) => Promise<string>
+  ): Promise<{ success: number; failed: number }> {
+    let success = 0;
+    let failed = 0;
+
+    for (const letter of this.queue) {
+      try {
+        await executeTool(letter.toolName, letter.input);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+
+    return { success, failed };
+  }
+}
+
+const dlq = new DeadLetterQueue();
+
+// Use in tool execution
+async function executeToolWithDLQ(
+  name: string,
+  input: Record<string, unknown>,
+  conversationId: string
+): Promise<string> {
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await withTimeout(executeTool(name, input), 15000, name);
+    } catch (error) {
+      if (attempt === maxAttempts) {
+        dlq.add({
+          timestamp: new Date().toISOString(),
+          toolName: name,
+          input,
+          error: error instanceof Error ? error.message : String(error),
+          attempts: maxAttempts,
+          conversationId,
+        });
+
+        return JSON.stringify({
+          error: `${name} is currently unavailable after ${maxAttempts} attempts.`,
+          ticket: `DLQ-${Date.now()}`,
+          suggestion: "This issue has been logged. Please try again later.",
+        });
+      }
+    }
+  }
+
+  return JSON.stringify({ error: "Unreachable" });
+}
+```
+
+### Reporting Errors to the LLM
+
+The way you format errors matters. Give the LLM enough context to help the user:
+
+```typescript
+// BAD: Generic error
+return JSON.stringify({ error: "Failed" });
+
+// BAD: Too technical
+return JSON.stringify({
+  error: "ECONNRESET: socket hang up at TCP.onclose",
+});
+
+// GOOD: Actionable error with context
+return JSON.stringify({
+  error: "The weather service is temporarily unavailable",
+  error_type: "service_unavailable",
+  attempted_action: `Fetch weather for ${city}`,
+  suggestion: "Ask the user to try again in a few minutes, or offer " +
+    "to help with something else",
+  can_retry: true,
+});
+```
+
+### Wrapping It All Together
+
+```typescript
+class ResilientToolExecutor {
+  private dlq = new DeadLetterQueue();
+  private cache = new Map<string, { data: string; expiry: number }>();
+
+  async execute(
+    name: string,
+    input: Record<string, unknown>,
+    options: {
+      timeoutMs?: number;
+      maxRetries?: number;
+      cacheTtlMs?: number;
+    } = {}
+  ): Promise<string> {
+    const { timeoutMs = 15000, maxRetries = 3, cacheTtlMs = 0 } = options;
+
+    // Check cache first
+    const cacheKey = `${name}:${JSON.stringify(input)}`;
+    if (cacheTtlMs > 0) {
+      const cached = this.cache.get(cacheKey);
+      if (cached && cached.expiry > Date.now()) {
+        return cached.data;
+      }
+    }
+
+    try {
+      const result = await withRetry(
+        () => withTimeout(executeTool(name, input), timeoutMs, name),
+        { ...defaultRetryOptions, maxRetries }
+      );
+
+      // Cache successful results
+      if (cacheTtlMs > 0) {
+        this.cache.set(cacheKey, {
+          data: result,
+          expiry: Date.now() + cacheTtlMs,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      this.dlq.add({
+        timestamp: new Date().toISOString(),
+        toolName: name,
+        input,
+        error: error instanceof Error ? error.message : String(error),
+        attempts: maxRetries + 1,
+        conversationId: "current",
+      });
+
+      return JSON.stringify({
+        error: `Tool "${name}" is unavailable`,
+        suggestion: "This has been logged. Please try again shortly.",
+      });
+    }
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Retrying non-retryable errors** -- A 401 (unauthorized) won't succeed on retry. Only retry transient errors (timeouts, 429s, 503s).
+
+2. **No timeout at all** -- A hanging HTTP request blocks the entire tool loop. Always set timeouts.
+
+3. **Swallowing errors silently** -- If you catch an error and return empty string, the LLM has no idea what happened. Always return a descriptive error.
+
+4. **Infinite retry loops** -- Always cap retries with `maxRetries`. Exponential backoff without a cap can wait minutes between retries.
+
+5. **Not logging failures** -- In production, failed tool calls are critical signals. Log them with timestamps, inputs, and error details for debugging.
+
+## Your Task
+
+Build a `ResilientToolExecutor` class that wraps any tool handler with:
+
+1. Retry logic (configurable max retries, exponential backoff)
+2. Timeout (configurable per tool)
+3. Fallback responses (configurable per tool)
+4. Dead-letter queue for unrecoverable failures
+5. Simple in-memory cache with TTL
+
+Test it with a mock tool that fails 50% of the time and another that always times out. Verify that retries work, fallbacks are returned, and failures end up in the dead-letter queue.

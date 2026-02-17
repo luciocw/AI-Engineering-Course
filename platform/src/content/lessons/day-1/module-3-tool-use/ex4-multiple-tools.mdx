@@ -1,0 +1,240 @@
+---
+title: "Registering Multiple Tools"
+description: "Register multiple tools with the LLM, understand how it selects between them, and use map-based dispatch for clean handler code."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 4
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["tools", "function-calling", "multiple-tools", "dispatch", "tool-registry"]
+---
+
+## What You'll Learn
+
+- How to register multiple tools in a single API call
+- How the LLM decides which tool to use (and when it uses none)
+- Map-based handler dispatch as an alternative to switch/case
+- Organizing tools into a clean registry pattern
+
+## Key Concepts
+
+### Registering Multiple Tools
+
+You can pass any number of tools to the API. Claude reads all descriptions and picks the best one (or none) for the user's request:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+const tools: Anthropic.Tool[] = [
+  {
+    name: "get_weather",
+    description: "Get current weather for a city. Use when the user asks about weather or temperature.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        city: { type: "string", description: "City name" },
+      },
+      required: ["city"],
+    },
+  },
+  {
+    name: "search_web",
+    description: "Search the web for current information. Use for factual questions about recent events.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Search query" },
+        num_results: { type: "number", description: "Number of results (default 5)" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "send_email",
+    description: "Send an email to a recipient. Only use when the user explicitly asks to send an email.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        to: { type: "string", description: "Recipient email address" },
+        subject: { type: "string", description: "Email subject line" },
+        body: { type: "string", description: "Email body text" },
+      },
+      required: ["to", "subject", "body"],
+    },
+  },
+];
+```
+
+### How the LLM Selects Tools
+
+Claude uses tool descriptions to decide which tool fits the user's intent. Given the tools above:
+
+- "What's the weather in London?" -> `get_weather`
+- "Who won the election?" -> `search_web`
+- "Email john@example.com about the meeting" -> `send_email`
+- "Tell me a joke" -> No tool (just responds with text)
+
+The quality of your descriptions directly affects tool selection accuracy. We will cover this in depth in Exercise 6.
+
+### Map-Based Handler Dispatch
+
+Instead of a growing switch statement, use a `Map` or plain object to register handlers:
+
+```typescript
+// Define a handler type
+type ToolHandler = (input: Record<string, unknown>) => string | Promise<string>;
+
+// Create a handler map
+const toolHandlers: Record<string, ToolHandler> = {
+  get_weather: (input) => {
+    const city = input.city as string;
+    // Call weather API
+    return JSON.stringify({ city, temp: 22, conditions: "Cloudy" });
+  },
+
+  search_web: (input) => {
+    const query = input.query as string;
+    // Call search API
+    return JSON.stringify({ results: [`Result for: ${query}`] });
+  },
+
+  send_email: (input) => {
+    const { to, subject, body } = input as {
+      to: string;
+      subject: string;
+      body: string;
+    };
+    // Send email
+    return JSON.stringify({ status: "sent", to });
+  },
+};
+
+// Dispatch function
+async function dispatchTool(name: string, input: Record<string, unknown>): Promise<string> {
+  const handler = toolHandlers[name];
+  if (!handler) {
+    return JSON.stringify({ error: `Unknown tool: ${name}` });
+  }
+  return handler(input);
+}
+```
+
+### The Complete Loop with Multiple Tools
+
+```typescript
+async function chat(userMessage: string): Promise<string> {
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools,
+    messages,
+  });
+
+  while (response.stop_reason === "tool_use") {
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        console.log(`Calling tool: ${block.name}`);
+        const result = await dispatchTool(
+          block.name,
+          block.input as Record<string, unknown>
+        );
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      }
+    }
+
+    messages.push({ role: "user", content: toolResults });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools,
+      messages,
+    });
+  }
+
+  const text = response.content.find((b) => b.type === "text");
+  return text?.type === "text" ? text.text : "";
+}
+```
+
+### The Registry Pattern
+
+For larger applications, encapsulate tools and handlers together:
+
+```typescript
+interface ToolRegistration {
+  definition: Anthropic.Tool;
+  handler: ToolHandler;
+}
+
+class ToolRegistry {
+  private tools = new Map<string, ToolRegistration>();
+
+  register(name: string, definition: Anthropic.Tool, handler: ToolHandler) {
+    this.tools.set(name, { definition, handler });
+  }
+
+  getDefinitions(): Anthropic.Tool[] {
+    return Array.from(this.tools.values()).map((t) => t.definition);
+  }
+
+  async execute(name: string, input: Record<string, unknown>): Promise<string> {
+    const tool = this.tools.get(name);
+    if (!tool) {
+      return JSON.stringify({ error: `Unknown tool: ${name}` });
+    }
+    return tool.handler(input);
+  }
+}
+
+// Usage
+const registry = new ToolRegistry();
+
+registry.register(
+  "get_weather",
+  {
+    name: "get_weather",
+    description: "Get weather for a city",
+    input_schema: {
+      type: "object" as const,
+      properties: { city: { type: "string" } },
+      required: ["city"],
+    },
+  },
+  (input) => JSON.stringify({ temp: 22 })
+);
+
+// Pass to API
+const definitions = registry.getDefinitions();
+```
+
+## Common Mistakes
+
+1. **Too many tools** -- Providing 20+ tools can overwhelm the model and slow responses. Group related functionality into fewer tools with broader capabilities.
+
+2. **Overlapping descriptions** -- If two tools have similar descriptions, the LLM may pick the wrong one. Make each description clearly distinct.
+
+3. **Missing handler for a registered tool** -- Always ensure every tool definition has a corresponding handler. The registry pattern prevents this.
+
+4. **Not handling unknown tools gracefully** -- Always have a fallback for unrecognized tool names. Return a clear error message so the LLM can recover.
+
+5. **Synchronous handlers blocking the event loop** -- If a handler calls an external API, make it `async` and `await` it properly.
+
+## Your Task
+
+Build a `ToolRegistry` class and register four tools: `get_weather`, `lookup_contact`, `create_note`, and `list_notes`. Each tool should have a proper schema and a mock handler. Then write the complete chat loop using your registry to dispatch tool calls. Test it with a message that should trigger one of the tools.

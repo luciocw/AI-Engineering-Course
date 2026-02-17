@@ -1,0 +1,461 @@
+---
+title: "Cost Tracking: Budget Management for LLM APIs"
+description: "Build a CostTracker utility for token counting, budget management, and cost optimization strategies in LLM applications."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 17
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "cost-tracking", "budget", "tokens", "optimization", "monitoring"]
+---
+
+## What You'll Learn
+
+- How to track costs across all your LLM API calls
+- Building a CostTracker utility class
+- Budget management with alerts and limits
+- Cost optimization strategies for production applications
+- Analyzing spending patterns to reduce waste
+
+## Key Concepts
+
+### Why Cost Tracking Matters
+
+LLM API costs can escalate quickly and silently. Without tracking, you might discover a $500 bill from a single runaway loop. A cost tracker gives you:
+
+- Real-time visibility into spending
+- Per-feature and per-user cost attribution
+- Budget limits that prevent runaway costs
+- Data to optimize your prompts and model selection
+
+```typescript
+// Real scenario: A chatbot handling 1000 conversations per day
+// Without tracking: "Why is our API bill $3,000 this month?"
+// With tracking: "The summarization feature costs $0.12 per call,
+//                 used 800 times/day = $96/day. We can switch
+//                 to Haiku and cut that to $8/day."
+```
+
+### The CostTracker Class
+
+```typescript
+interface ModelPricing {
+  inputPerMillion: number;
+  outputPerMillion: number;
+}
+
+interface CostEntry {
+  id: string;
+  timestamp: Date;
+  model: string;
+  feature: string;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  metadata?: Record<string, string>;
+}
+
+interface CostSummary {
+  totalCost: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCalls: number;
+  costByModel: Record<string, number>;
+  costByFeature: Record<string, number>;
+  averageCostPerCall: number;
+}
+
+class CostTracker {
+  private entries: CostEntry[] = [];
+  private pricing: Record<string, ModelPricing>;
+  private budgetLimit: number | null = null;
+  private onBudgetWarning?: (current: number, limit: number) => void;
+  private warningThreshold: number = 0.8; // Warn at 80%
+
+  constructor(pricing: Record<string, ModelPricing>) {
+    this.pricing = pricing;
+  }
+
+  setBudget(
+    limit: number,
+    onWarning?: (current: number, limit: number) => void
+  ): void {
+    this.budgetLimit = limit;
+    this.onBudgetWarning = onWarning;
+  }
+
+  track(entry: {
+    model: string;
+    feature: string;
+    inputTokens: number;
+    outputTokens: number;
+    metadata?: Record<string, string>;
+  }): CostEntry {
+    const modelPricing = this.pricing[entry.model];
+    if (!modelPricing) {
+      throw new Error(`Unknown model: ${entry.model}. Add pricing first.`);
+    }
+
+    const cost =
+      (entry.inputTokens / 1_000_000) * modelPricing.inputPerMillion +
+      (entry.outputTokens / 1_000_000) * modelPricing.outputPerMillion;
+
+    const costEntry: CostEntry = {
+      id: `cost_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date(),
+      model: entry.model,
+      feature: entry.feature,
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+      cost,
+      metadata: entry.metadata,
+    };
+
+    this.entries.push(costEntry);
+
+    // Check budget
+    this.checkBudget();
+
+    return costEntry;
+  }
+
+  private checkBudget(): void {
+    if (!this.budgetLimit) return;
+
+    const totalCost = this.getTotalCost();
+
+    if (totalCost >= this.budgetLimit) {
+      throw new Error(
+        `Budget limit exceeded: $${totalCost.toFixed(4)} / $${this.budgetLimit.toFixed(2)}`
+      );
+    }
+
+    if (
+      this.onBudgetWarning &&
+      totalCost >= this.budgetLimit * this.warningThreshold
+    ) {
+      this.onBudgetWarning(totalCost, this.budgetLimit);
+    }
+  }
+
+  getTotalCost(): number {
+    return this.entries.reduce((sum, e) => sum + e.cost, 0);
+  }
+
+  getSummary(filter?: {
+    since?: Date;
+    feature?: string;
+    model?: string;
+  }): CostSummary {
+    let filtered = this.entries;
+
+    if (filter?.since) {
+      filtered = filtered.filter((e) => e.timestamp >= filter.since!);
+    }
+    if (filter?.feature) {
+      filtered = filtered.filter((e) => e.feature === filter.feature);
+    }
+    if (filter?.model) {
+      filtered = filtered.filter((e) => e.model === filter.model);
+    }
+
+    const costByModel: Record<string, number> = {};
+    const costByFeature: Record<string, number> = {};
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalCost = 0;
+
+    for (const entry of filtered) {
+      costByModel[entry.model] = (costByModel[entry.model] || 0) + entry.cost;
+      costByFeature[entry.feature] =
+        (costByFeature[entry.feature] || 0) + entry.cost;
+      totalInputTokens += entry.inputTokens;
+      totalOutputTokens += entry.outputTokens;
+      totalCost += entry.cost;
+    }
+
+    return {
+      totalCost,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCalls: filtered.length,
+      costByModel,
+      costByFeature,
+      averageCostPerCall: filtered.length > 0 ? totalCost / filtered.length : 0,
+    };
+  }
+
+  getTopExpenses(n: number = 5): CostEntry[] {
+    return [...this.entries].sort((a, b) => b.cost - a.cost).slice(0, n);
+  }
+
+  reset(): void {
+    this.entries = [];
+  }
+}
+```
+
+### Integrating with API Calls
+
+Wrap your API calls to automatically track costs:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+const tracker = new CostTracker({
+  "claude-haiku-3-5": { inputPerMillion: 0.25, outputPerMillion: 1.25 },
+  "claude-sonnet-4-20250514": { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+  "claude-opus-4-20250514": { inputPerMillion: 15.0, outputPerMillion: 75.0 },
+});
+
+// Set a daily budget
+tracker.setBudget(5.0, (current, limit) => {
+  console.warn(
+    `Budget warning: $${current.toFixed(4)} of $${limit.toFixed(2)} used (${((current / limit) * 100).toFixed(1)}%)`
+  );
+});
+
+// Tracked API call wrapper
+async function trackedCall(config: {
+  model: string;
+  maxTokens: number;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  system?: string;
+  feature: string;
+  metadata?: Record<string, string>;
+}): Promise<{ text: string; cost: number }> {
+  const response = await client.messages.create({
+    model: config.model,
+    max_tokens: config.maxTokens,
+    system: config.system,
+    messages: config.messages,
+  });
+
+  const costEntry = tracker.track({
+    model: config.model,
+    feature: config.feature,
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    metadata: config.metadata,
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  return { text, cost: costEntry.cost };
+}
+
+// Usage
+const result = await trackedCall({
+  model: "claude-sonnet-4-20250514",
+  maxTokens: 256,
+  messages: [{ role: "user", content: "Explain closures in JavaScript" }],
+  feature: "education-module",
+  metadata: { userId: "user_123", topic: "closures" },
+});
+
+console.log(`Response: ${result.text}`);
+console.log(`Cost: $${result.cost.toFixed(6)}`);
+```
+
+### Cost Optimization Strategies
+
+```typescript
+class CostOptimizer {
+  private tracker: CostTracker;
+
+  constructor(tracker: CostTracker) {
+    this.tracker = tracker;
+  }
+
+  // Strategy 1: Identify expensive features
+  getOptimizationSuggestions(): string[] {
+    const summary = this.tracker.getSummary();
+    const suggestions: string[] = [];
+
+    // Find most expensive features
+    const sortedFeatures = Object.entries(summary.costByFeature).sort(
+      (a, b) => b[1] - a[1]
+    );
+
+    if (sortedFeatures.length > 0) {
+      const [topFeature, topCost] = sortedFeatures[0];
+      const percentage = (topCost / summary.totalCost) * 100;
+      suggestions.push(
+        `"${topFeature}" accounts for ${percentage.toFixed(1)}% of total cost ($${topCost.toFixed(4)}). Consider using a smaller model.`
+      );
+    }
+
+    // Check output/input ratio
+    if (summary.totalOutputTokens > summary.totalInputTokens * 2) {
+      suggestions.push(
+        "Output tokens significantly exceed input tokens. Consider asking for more concise responses."
+      );
+    }
+
+    // Check average cost per call
+    if (summary.averageCostPerCall > 0.01) {
+      suggestions.push(
+        `Average cost per call is $${summary.averageCostPerCall.toFixed(4)}. Consider if all calls need the current model tier.`
+      );
+    }
+
+    return suggestions;
+  }
+
+  // Strategy 2: Suggest model downgrades
+  suggestModelDowngrades(): Array<{
+    feature: string;
+    currentModel: string;
+    suggestedModel: string;
+    estimatedSavings: number;
+  }> {
+    const suggestions = [];
+    const summary = this.tracker.getSummary();
+
+    // If a feature uses Sonnet but has low token count, suggest Haiku
+    // This is a simplified heuristic - in production, also measure quality
+    for (const [feature, cost] of Object.entries(summary.costByFeature)) {
+      if (cost > 0 && summary.costByModel["claude-sonnet-4-20250514"]) {
+        suggestions.push({
+          feature,
+          currentModel: "claude-sonnet-4-20250514",
+          suggestedModel: "claude-haiku-3-5",
+          estimatedSavings: cost * 0.9, // Haiku is roughly 10x cheaper
+        });
+      }
+    }
+
+    return suggestions;
+  }
+}
+```
+
+### Reporting and Visualization
+
+```typescript
+function printCostReport(tracker: CostTracker): void {
+  const summary = tracker.getSummary();
+
+  console.log("=== Cost Report ===\n");
+  console.log(`Total Cost: $${summary.totalCost.toFixed(4)}`);
+  console.log(`Total Calls: ${summary.totalCalls}`);
+  console.log(`Avg Cost/Call: $${summary.averageCostPerCall.toFixed(6)}`);
+  console.log(
+    `Total Tokens: ${summary.totalInputTokens.toLocaleString()} in / ${summary.totalOutputTokens.toLocaleString()} out`
+  );
+
+  console.log("\n--- Cost by Model ---");
+  for (const [model, cost] of Object.entries(summary.costByModel)) {
+    const percentage = (cost / summary.totalCost) * 100;
+    const bar = "#".repeat(Math.round(percentage / 2));
+    console.log(`  ${model}: $${cost.toFixed(4)} (${percentage.toFixed(1)}%) ${bar}`);
+  }
+
+  console.log("\n--- Cost by Feature ---");
+  for (const [feature, cost] of Object.entries(summary.costByFeature)) {
+    const percentage = (cost / summary.totalCost) * 100;
+    const bar = "#".repeat(Math.round(percentage / 2));
+    console.log(`  ${feature}: $${cost.toFixed(4)} (${percentage.toFixed(1)}%) ${bar}`);
+  }
+
+  console.log("\n--- Top 5 Most Expensive Calls ---");
+  const topExpenses = tracker.getTopExpenses(5);
+  for (const entry of topExpenses) {
+    console.log(
+      `  $${entry.cost.toFixed(6)} | ${entry.feature} | ${entry.model} | ${entry.inputTokens + entry.outputTokens} tokens`
+    );
+  }
+}
+```
+
+### Per-User Cost Tracking
+
+In multi-user applications, track costs per user for fair billing or usage limits:
+
+```typescript
+class UserCostTracker {
+  private tracker: CostTracker;
+  private userLimits: Map<string, number> = new Map();
+
+  constructor(tracker: CostTracker) {
+    this.tracker = tracker;
+  }
+
+  setUserLimit(userId: string, dailyLimit: number): void {
+    this.userLimits.set(userId, dailyLimit);
+  }
+
+  async trackUserCall(
+    userId: string,
+    config: {
+      model: string;
+      feature: string;
+      inputTokens: number;
+      outputTokens: number;
+    }
+  ): Promise<CostEntry> {
+    // Check user's daily spend
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const userSummary = this.tracker.getSummary({
+      since: today,
+    });
+
+    // Filter entries by user (using metadata)
+    const userDailyCost = this.tracker
+      .getTopExpenses(1000)
+      .filter(
+        (e) =>
+          e.metadata?.userId === userId &&
+          e.timestamp >= today
+      )
+      .reduce((sum, e) => sum + e.cost, 0);
+
+    const limit = this.userLimits.get(userId);
+    if (limit && userDailyCost >= limit) {
+      throw new Error(
+        `User ${userId} has exceeded daily limit of $${limit.toFixed(2)}`
+      );
+    }
+
+    return this.tracker.track({
+      ...config,
+      metadata: { userId },
+    });
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Not tracking costs at all**: This is the most common mistake. By the time you realize you are overspending, you have already overspent. Start tracking from day one.
+
+2. **Tracking only total cost**: Total cost hides where the money goes. Break down by feature, model, and user to find optimization opportunities.
+
+3. **Setting budgets too high**: A loose budget is the same as no budget. Start conservative and increase as you understand your usage patterns.
+
+4. **Not considering token overhead**: System prompts, few-shot examples, and conversation history all add input tokens to every call. These "overhead" tokens can easily exceed the actual user content.
+
+5. **Optimizing for cost at the expense of quality**: Switching to a cheaper model saves money but might increase errors. Always measure quality alongside cost. The cheapest model that meets your quality bar is the right choice.
+
+## Your Task
+
+Build a complete `CostTracker` system that:
+
+1. Tracks costs per API call with model, feature, and token details
+2. Supports budget limits with warnings at a configurable threshold
+3. Provides summary reports broken down by model and feature
+4. Includes a `trackedCall` wrapper that automatically tracks every API call
+5. Generates optimization suggestions based on spending patterns
+
+Test by:
+- Making at least 10 API calls across different models and features
+- Printing a full cost report with breakdowns
+- Setting a budget and demonstrating the warning system
+- Running the cost optimizer and printing suggestions
+
+Bonus: Add time-based tracking (cost per hour, per day) and a method that projects monthly costs based on current usage patterns.

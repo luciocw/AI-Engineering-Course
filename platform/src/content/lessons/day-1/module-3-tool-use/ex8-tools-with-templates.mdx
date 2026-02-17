@@ -1,0 +1,265 @@
+---
+title: "Tools with Handlebars Templates"
+description: "Use Handlebars templates from Module 1 to format tool results into structured, readable output for the LLM."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 8
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["tools", "function-calling", "handlebars", "templates", "formatting", "cross-module"]
+---
+
+## What You'll Learn
+
+- How to combine Handlebars templates (from Module 1) with tool results
+- Formatting structured data from tools into clean text for the LLM
+- Template-driven response formatting patterns
+- Keeping tool logic and presentation separate
+
+## Key Concepts
+
+### Why Template Tool Results?
+
+Tool handlers return raw data (JSON). But the LLM processes text much better than deeply nested JSON. By formatting tool results with Handlebars templates, you give the LLM cleaner input to work with.
+
+```typescript
+// Without templates: raw JSON blob
+'{"orders":[{"id":"ORD-123","items":[{"name":"Widget","qty":2,"price":9.99}],"total":19.98,"status":"shipped"}]}'
+
+// With templates: structured, readable text
+`Order ORD-123:
+  Status: shipped
+  Items:
+    - Widget (x2) - $9.99 each
+  Total: $19.98`
+```
+
+### Setting Up Handlebars
+
+```typescript
+import Handlebars from "handlebars";
+
+// Register useful helpers
+Handlebars.registerHelper("currency", (value: number) => {
+  return new Handlebars.SafeString(`$${value.toFixed(2)}`);
+});
+
+Handlebars.registerHelper("uppercase", (str: string) => {
+  return str.toUpperCase();
+});
+
+Handlebars.registerHelper("date", (isoString: string) => {
+  return new Date(isoString).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+});
+```
+
+### Templating Tool Results
+
+Define templates alongside your tool handlers:
+
+```typescript
+// Template for order lookup results
+const orderTemplate = Handlebars.compile(`
+{{#if error}}
+Error: {{error}}
+{{else}}
+{{#each orders}}
+## Order {{id}}
+- **Status:** {{uppercase status}}
+- **Date:** {{date created_at}}
+- **Items:**
+{{#each items}}
+  - {{name}} (x{{qty}}) - {{currency price}} each
+{{/each}}
+- **Total:** {{currency total}}
+
+{{/each}}
+Found {{orders.length}} order(s).
+{{/if}}
+`.trim());
+
+// Template for search results
+const searchTemplate = Handlebars.compile(`
+{{#if results.length}}
+Found {{total}} results for "{{query}}":
+
+{{#each results}}
+{{@index}}. **{{title}}**
+   {{snippet}}
+   Source: {{url}}
+
+{{/each}}
+{{else}}
+No results found for "{{query}}".
+{{/if}}
+`.trim());
+```
+
+### Using Templates in Tool Handlers
+
+```typescript
+interface OrderData {
+  id: string;
+  status: string;
+  created_at: string;
+  items: { name: string; qty: number; price: number }[];
+  total: number;
+}
+
+async function handleOrderLookup(input: { order_id: string }): Promise<string> {
+  try {
+    // Fetch from your API
+    const response = await fetch(
+      `https://api.example.com/orders/${input.order_id}`
+    );
+
+    if (!response.ok) {
+      return orderTemplate({ error: `Order ${input.order_id} not found` });
+    }
+
+    const order: OrderData = await response.json();
+    return orderTemplate({ orders: [order] });
+  } catch (error) {
+    return orderTemplate({
+      error: "Could not connect to the order system. Please try again.",
+    });
+  }
+}
+```
+
+### Template Registry Pattern
+
+Manage templates alongside tools in a clean structure:
+
+```typescript
+interface TemplatedTool {
+  definition: Anthropic.Tool;
+  template: HandlebarsTemplateDelegate;
+  fetchData: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+}
+
+function createTemplatedTool(config: {
+  name: string;
+  description: string;
+  inputSchema: Anthropic.Tool["input_schema"];
+  templateString: string;
+  fetchData: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+}): TemplatedTool {
+  return {
+    definition: {
+      name: config.name,
+      description: config.description,
+      input_schema: config.inputSchema,
+    },
+    template: Handlebars.compile(config.templateString),
+    fetchData: config.fetchData,
+  };
+}
+
+// Execute a templated tool
+async function executeTemplatedTool(
+  tool: TemplatedTool,
+  input: Record<string, unknown>
+): Promise<string> {
+  try {
+    const data = await tool.fetchData(input);
+    return tool.template(data);
+  } catch (error) {
+    return tool.template({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+```
+
+### Full Example: Contact Lookup with Templates
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import Handlebars from "handlebars";
+
+const client = new Anthropic();
+
+// Register helpers
+Handlebars.registerHelper("phone", (num: string) => {
+  if (!num) return "N/A";
+  return num.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3");
+});
+
+// Define template
+const contactTemplate = Handlebars.compile(`
+{{#if error}}
+Could not find contact: {{error}}
+{{else}}
+## {{name}}
+- **Email:** {{email}}
+- **Phone:** {{phone phoneNumber}}
+- **Company:** {{company}}
+- **Role:** {{role}}
+{{#if notes}}
+- **Notes:** {{notes}}
+{{/if}}
+{{/if}}
+`.trim());
+
+// Tool definition
+const contactTool: Anthropic.Tool = {
+  name: "lookup_contact",
+  description: "Look up a contact by name. Returns their email, phone, company, and role.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      name: { type: "string", description: "Full or partial name to search for" },
+    },
+    required: ["name"],
+  },
+};
+
+// Mock data
+const contacts = [
+  { name: "Alice Johnson", email: "alice@acme.com", phoneNumber: "5551234567", company: "Acme Corp", role: "Engineer", notes: "Prefers email" },
+  { name: "Bob Smith", email: "bob@globex.com", phoneNumber: "5559876543", company: "Globex Inc", role: "Manager", notes: "" },
+];
+
+// Handler using template
+async function handleContactLookup(input: { name: string }): Promise<string> {
+  const match = contacts.find((c) =>
+    c.name.toLowerCase().includes(input.name.toLowerCase())
+  );
+
+  if (!match) {
+    return contactTemplate({ error: `No contact found matching "${input.name}"` });
+  }
+
+  return contactTemplate(match);
+}
+```
+
+The LLM receives nicely formatted text instead of raw JSON, making it easier to incorporate the information into a natural response.
+
+## Common Mistakes
+
+1. **Over-formatting for the LLM** -- The template output goes to the LLM, not the end user. The LLM will reformulate it anyway. Focus on clarity and structure, not visual polish.
+
+2. **Including too much data** -- Templates should filter data, not dump everything. Only include fields the LLM needs to answer the user's question.
+
+3. **Forgetting error templates** -- Always handle the error case in your template. An empty or broken template result is harder for the LLM to work with than a clear error message.
+
+4. **Not registering helpers** -- If you use a helper like `{{currency value}}` but forget to register it, Handlebars silently outputs nothing. Register all helpers before compiling templates.
+
+5. **Mixing HTML into tool results** -- The tool result goes to the LLM, not a browser. Use plain text or markdown formatting.
+
+## Your Task
+
+Create two templated tools:
+
+1. **`list_products`** -- Fetches products from a mock catalog and formats them with a Handlebars template showing name, price (formatted as currency), category, and availability.
+
+2. **`get_order_summary`** -- Looks up an order and formats it with a template showing order ID, items with quantities and prices, subtotal, tax, and total.
+
+Use `Handlebars.registerHelper` for currency formatting and date formatting. Include error handling in both templates. Wire them into a working tool use loop.

@@ -1,0 +1,288 @@
+---
+title: "Parallel Tool Execution"
+description: "Handle the LLM requesting multiple tools at once, execute them in parallel with Promise.all, and manage mixed success/failure results."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 12
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "parallel-execution", "promise-all", "concurrency", "advanced"]
+---
+
+## What You'll Learn
+
+- How the LLM can request multiple tools in a single response
+- Using `Promise.all` to execute tool calls concurrently
+- Handling mixed results when some tools succeed and others fail
+- Performance benefits and trade-offs of parallel execution
+
+## Key Concepts
+
+### Multiple Tool Calls in One Response
+
+Claude can include multiple `tool_use` blocks in a single response when it needs data from several independent sources:
+
+```typescript
+// User: "Compare the weather in Tokyo and Paris"
+
+// Claude's response.content:
+[
+  {
+    type: "text",
+    text: "I'll check the weather in both cities for you.",
+  },
+  {
+    type: "tool_use",
+    id: "toolu_01AAA",
+    name: "get_weather",
+    input: { city: "Tokyo" },
+  },
+  {
+    type: "tool_use",
+    id: "toolu_01BBB",
+    name: "get_weather",
+    input: { city: "Paris" },
+  },
+]
+```
+
+Both tool calls are independent -- they don't depend on each other's results. This is the perfect opportunity for parallel execution.
+
+### Sequential vs. Parallel Execution
+
+```typescript
+// SEQUENTIAL: One at a time (slow)
+const results: Anthropic.ToolResultBlockParam[] = [];
+for (const block of response.content) {
+  if (block.type === "tool_use") {
+    const result = await executeTool(block.name, block.input); // waits for each
+    results.push({
+      type: "tool_result",
+      tool_use_id: block.id,
+      content: result,
+    });
+  }
+}
+// Total time: tool1Time + tool2Time + tool3Time
+
+// PARALLEL: All at once (fast)
+const toolBlocks = response.content.filter(
+  (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+);
+
+const results = await Promise.all(
+  toolBlocks.map(async (block) => {
+    const result = await executeTool(block.name, block.input);
+    return {
+      type: "tool_result" as const,
+      tool_use_id: block.id,
+      content: result,
+    };
+  })
+);
+// Total time: max(tool1Time, tool2Time, tool3Time)
+```
+
+### Handling Mixed Results
+
+When running tools in parallel, some may succeed while others fail. Use `Promise.allSettled` for resilient execution:
+
+```typescript
+async function executeToolsInParallel(
+  blocks: Anthropic.ToolUseBlock[]
+): Promise<Anthropic.ToolResultBlockParam[]> {
+  const promises = blocks.map(async (block) => {
+    try {
+      const result = await executeTool(block.name, block.input);
+      return {
+        type: "tool_result" as const,
+        tool_use_id: block.id,
+        content: result,
+      };
+    } catch (error) {
+      return {
+        type: "tool_result" as const,
+        tool_use_id: block.id,
+        content: JSON.stringify({
+          error: `Tool ${block.name} failed: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`,
+        }),
+        is_error: true,
+      };
+    }
+  });
+
+  const settled = await Promise.allSettled(promises);
+
+  return settled.map((result, index) => {
+    if (result.status === "fulfilled") {
+      return result.value;
+    }
+    // This should rarely happen since we catch errors above
+    return {
+      type: "tool_result" as const,
+      tool_use_id: blocks[index].id,
+      content: JSON.stringify({ error: "Tool execution failed unexpectedly" }),
+      is_error: true,
+    };
+  });
+}
+```
+
+### The `is_error` Flag
+
+When a tool fails, set `is_error: true` on the tool result. This tells Claude the tool failed and it should handle the error gracefully:
+
+```typescript
+// Success result
+{
+  type: "tool_result",
+  tool_use_id: "toolu_01AAA",
+  content: JSON.stringify({ city: "Tokyo", temp: 22 }),
+}
+
+// Error result
+{
+  type: "tool_result",
+  tool_use_id: "toolu_01BBB",
+  content: JSON.stringify({ error: "Weather API timeout for Paris" }),
+  is_error: true,
+}
+```
+
+Claude will acknowledge partial results: "I found that Tokyo is 22C, but I couldn't get the weather for Paris due to a service timeout."
+
+### Complete Parallel Tool Loop
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+async function runWithParallelTools(userMessage: string): Promise<string> {
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools,
+    messages,
+  });
+
+  let iterations = 0;
+
+  while (response.stop_reason === "tool_use" && iterations < 10) {
+    iterations++;
+    messages.push({ role: "assistant", content: response.content });
+
+    // Collect all tool_use blocks
+    const toolBlocks = response.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+    );
+
+    console.log(
+      `Iteration ${iterations}: executing ${toolBlocks.length} tool(s) in parallel`
+    );
+
+    // Execute in parallel
+    const toolResults = await executeToolsInParallel(toolBlocks);
+
+    messages.push({ role: "user", content: toolResults });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools,
+      messages,
+    });
+  }
+
+  const text = response.content.find((b) => b.type === "text");
+  return text?.type === "text" ? text.text : "";
+}
+```
+
+### Concurrency Limits
+
+If the LLM requests many tools at once and each makes an HTTP call, you might overwhelm external APIs. Use a concurrency limiter:
+
+```typescript
+async function withConcurrencyLimit<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number
+): Promise<T[]> {
+  const results: T[] = [];
+  const executing = new Set<Promise<void>>();
+
+  for (const task of tasks) {
+    const promise = task().then((result) => {
+      results.push(result);
+      executing.delete(promise);
+    });
+    executing.add(promise);
+
+    if (executing.size >= limit) {
+      await Promise.race(executing);
+    }
+  }
+
+  await Promise.all(executing);
+  return results;
+}
+
+// Usage: max 3 concurrent tool executions
+const toolResults = await withConcurrencyLimit(
+  toolBlocks.map((block) => () =>
+    executeTool(block.name, block.input).then((result) => ({
+      type: "tool_result" as const,
+      tool_use_id: block.id,
+      content: result,
+    }))
+  ),
+  3 // max concurrent
+);
+```
+
+### When Does the LLM Use Parallel Calls?
+
+Claude tends to request parallel tool calls when:
+- The user asks about multiple independent items ("weather in Tokyo AND Paris")
+- Multiple data sources are needed ("get the user profile and their recent orders")
+- The user explicitly asks for a comparison ("compare prices on Amazon and eBay")
+
+Claude uses sequential calls when results depend on each other (see Exercise 11 on chaining).
+
+## Common Mistakes
+
+1. **Not ordering results correctly** -- `Promise.all` preserves order, but `Promise.allSettled` does too. Make sure each result maps back to its `tool_use_id`.
+
+2. **Forgetting `is_error: true`** -- Without this flag, Claude treats the error message as a valid result and may give the user incorrect information.
+
+3. **No concurrency limit** -- Firing 20 HTTP requests simultaneously can trigger rate limits or timeouts. Use a concurrency limiter for production code.
+
+4. **Treating all tools as parallelizable** -- Some tools have side effects that conflict. If `create_user` and `send_welcome_email` are both requested, the email depends on the user being created first. Be careful about which tools you parallelize.
+
+5. **Not handling timeouts** -- Add per-tool timeouts so one slow tool doesn't block the entire batch:
+
+```typescript
+async function executeWithTimeout(fn: () => Promise<string>, ms: number): Promise<string> {
+  const timeout = new Promise<string>((_, reject) =>
+    setTimeout(() => reject(new Error(`Tool timed out after ${ms}ms`)), ms)
+  );
+  return Promise.race([fn(), timeout]);
+}
+```
+
+## Your Task
+
+Build a comparison tool system with three tools:
+
+- `get_product_info` -- fetches product details by name (mock with a delay of 500ms-2000ms)
+- `get_product_reviews` -- fetches reviews for a product (mock with a delay)
+- `get_product_price_history` -- fetches price history (mock with a delay)
+
+When the user asks "Compare Widget A and Widget B", the LLM should request all six tool calls (3 tools x 2 products) in parallel. Implement the parallel execution with `Promise.allSettled`, add a concurrency limit of 3, and handle the case where one or more tools fail. Log the execution time to demonstrate the parallel speedup.

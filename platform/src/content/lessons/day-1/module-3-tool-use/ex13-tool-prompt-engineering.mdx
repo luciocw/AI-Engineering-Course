@@ -1,0 +1,273 @@
+---
+title: "Prompt Engineering for Tool Use"
+description: "Optimize system prompts to guide tool selection, prevent unnecessary tool calls, and control how the LLM uses your tools."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 13
+difficulty: "advanced"
+estimatedMinutes: 20
+isFree: true
+tags: ["tools", "function-calling", "prompt-engineering", "system-prompt", "tool-selection", "advanced"]
+---
+
+## What You'll Learn
+
+- How system prompts influence tool selection behavior
+- Techniques for guiding the LLM toward (or away from) specific tools
+- Preventing unnecessary tool calls that waste tokens
+- The `tool_choice` parameter for forcing or disabling tools
+
+## Key Concepts
+
+### The System Prompt's Role in Tool Use
+
+The system prompt is your primary lever for controlling tool behavior. Claude reads the system prompt, tool descriptions, and user message together to decide whether and which tool to call.
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// Without system prompt guidance
+const response1 = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  tools: tools,
+  messages: [{ role: "user", content: "What's 2 + 2?" }],
+});
+// Claude might call the calculator tool (unnecessary!)
+
+// With system prompt guidance
+const response2 = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  system: "You are a helpful assistant. Only use tools when you cannot answer " +
+    "from your own knowledge. For simple math, general knowledge, and common " +
+    "questions, respond directly without tools.",
+  tools: tools,
+  messages: [{ role: "user", content: "What's 2 + 2?" }],
+});
+// Claude answers directly: "4"
+```
+
+### Guiding Tool Selection
+
+Use the system prompt to explain when each tool is appropriate:
+
+```typescript
+const systemPrompt = `You are a customer support assistant for Acme Corp.
+
+You have access to the following tools. Use them according to these guidelines:
+
+1. **lookup_customer** - Use FIRST when a customer mentions their name, email, or
+   account number. You need customer data before you can help with orders or billing.
+
+2. **search_orders** - Use AFTER looking up the customer. Search their orders when
+   they ask about purchases, deliveries, or returns.
+
+3. **search_knowledge_base** - Use for questions about company policies, product
+   information, or how-to guides. Do NOT use for customer-specific questions.
+
+4. **create_ticket** - Use ONLY when you cannot resolve the issue yourself. Always
+   try the other tools first. Ask the customer for permission before creating a ticket.
+
+IMPORTANT:
+- Never call search_orders without first calling lookup_customer
+- If the customer is just asking a general question, use search_knowledge_base
+- For greetings and simple questions, respond directly without any tools
+`;
+```
+
+### Preventing Unnecessary Tool Calls
+
+Tools cost extra tokens (the definitions are included in every request). Here are strategies to reduce unnecessary calls:
+
+```typescript
+// Strategy 1: Explicit "don't use tools" guidance
+const system = `Answer questions from your own knowledge when possible.
+Only use tools when you need real-time data or customer-specific information.
+DO NOT use tools for:
+- General knowledge questions
+- Simple math or calculations
+- Opinions or recommendations
+- Explaining how something works`;
+
+// Strategy 2: Use tool_choice to control behavior
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  tools: tools,
+  tool_choice: { type: "auto" }, // Default: LLM decides (can use tools or not)
+  messages: [{ role: "user", content: userMessage }],
+});
+```
+
+### The `tool_choice` Parameter
+
+Control whether and which tools can be used:
+
+```typescript
+// "auto" (default) -- LLM decides whether to use tools
+tool_choice: { type: "auto" }
+
+// "any" -- LLM MUST use a tool (at least one)
+tool_choice: { type: "any" }
+
+// Specific tool -- LLM MUST use this exact tool
+tool_choice: { type: "tool", name: "get_weather" }
+
+// Disable -- Do not use tools even if provided
+// (Just don't pass the tools parameter)
+```
+
+Use cases:
+- `auto`: Normal operation, LLM picks the best approach
+- `any`: When you know a tool call is needed (e.g., "search for X")
+- Specific tool: When you want to force a particular tool (e.g., data extraction)
+
+```typescript
+// Force the LLM to use the extract_data tool
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  tools: [extractDataTool],
+  tool_choice: { type: "tool", name: "extract_data" },
+  messages: [
+    {
+      role: "user",
+      content: "Extract the key information from this email: " + emailText,
+    },
+  ],
+});
+```
+
+### Ordering and Priority in Prompts
+
+How you structure the system prompt affects which tools get preferred:
+
+```typescript
+// Pattern: Numbered priority list
+const system = `You are an assistant with these tools, listed in order of preference:
+
+1. FIRST, try to answer from your own knowledge
+2. If you need real-time data, use search_web
+3. If you need customer-specific data, use lookup_customer
+4. If you need to take action, use create_ticket (ask permission first)
+
+Always try options higher on the list before moving to lower ones.`;
+
+// Pattern: Decision tree
+const system = `When the user asks a question, follow this decision tree:
+
+Is it a general knowledge question?
+  → YES: Answer directly, no tools needed
+  → NO: Continue
+
+Does it require real-time or external data?
+  → YES: Use search_web
+  → NO: Continue
+
+Is it about a specific customer or account?
+  → YES: Use lookup_customer first, then search_orders
+  → NO: Use search_knowledge_base`;
+```
+
+### Prompt Patterns for Common Issues
+
+```typescript
+// Problem: LLM calls tools too eagerly
+const fix1 = "Think step by step about whether you need a tool. " +
+  "If you can answer confidently from your training data, do so directly.";
+
+// Problem: LLM doesn't use tools when it should
+const fix2 = "For any question about current data, prices, availability, " +
+  "or customer-specific information, ALWAYS use the appropriate tool. " +
+  "Do not guess or make up data.";
+
+// Problem: LLM calls the wrong tool
+const fix3 = "Before calling a tool, state which tool you plan to use and why. " +
+  "This helps ensure you pick the right one.";
+
+// Problem: LLM calls tools in the wrong order
+const fix4 = "IMPORTANT: Always call lookup_customer before search_orders. " +
+  "You need the customer_id from lookup_customer to search their orders.";
+```
+
+### Testing Tool Selection
+
+Create a test suite for your prompts:
+
+```typescript
+interface ToolSelectionTest {
+  userMessage: string;
+  expectedTool: string | null; // null means no tool should be called
+  description: string;
+}
+
+const tests: ToolSelectionTest[] = [
+  {
+    userMessage: "Hello!",
+    expectedTool: null,
+    description: "Greeting should not trigger any tool",
+  },
+  {
+    userMessage: "What's the weather in Paris?",
+    expectedTool: "get_weather",
+    description: "Weather question should use get_weather",
+  },
+  {
+    userMessage: "What is photosynthesis?",
+    expectedTool: null,
+    description: "General knowledge should not use any tool",
+  },
+  {
+    userMessage: "Look up order #12345 for customer alice@example.com",
+    expectedTool: "lookup_customer",
+    description: "Customer query should start with lookup_customer",
+  },
+];
+
+async function runToolSelectionTests(tests: ToolSelectionTest[]) {
+  for (const test of tests) {
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      system: systemPrompt,
+      tools,
+      messages: [{ role: "user", content: test.userMessage }],
+    });
+
+    const toolUsed = response.content.find((b) => b.type === "tool_use");
+    const actualTool = toolUsed?.type === "tool_use" ? toolUsed.name : null;
+
+    const pass = actualTool === test.expectedTool;
+    console.log(
+      `${pass ? "PASS" : "FAIL"}: ${test.description}` +
+        ` (expected: ${test.expectedTool}, got: ${actualTool})`
+    );
+  }
+}
+```
+
+## Common Mistakes
+
+1. **No system prompt at all** -- Without guidance, the LLM guesses when to use tools based solely on descriptions. Always provide a system prompt for tool-using applications.
+
+2. **Contradicting tool descriptions in the system prompt** -- If the tool description says "use for X" but the system prompt says "never use for X", the LLM gets confused. Keep them consistent.
+
+3. **Overly restrictive prompts** -- Saying "NEVER use tools unless absolutely necessary" can prevent the LLM from using tools when they would genuinely help.
+
+4. **Not testing prompt changes** -- A small change to your system prompt can dramatically shift tool selection behavior. Always test with a variety of inputs.
+
+5. **Forgetting about edge cases** -- Test with ambiguous inputs that could go either way. These reveal weaknesses in your prompts.
+
+## Your Task
+
+You have a customer support bot with five tools: `lookup_customer`, `search_orders`, `search_faq`, `create_ticket`, and `escalate_to_human`. Write a system prompt that:
+
+1. Guides the LLM to use `search_faq` for general questions
+2. Requires `lookup_customer` before `search_orders`
+3. Only creates tickets after attempting other resolutions
+4. Only escalates to human for billing disputes over $100
+
+Then write 8 test cases covering different scenarios and verify the LLM selects the correct tool (or no tool) for each.

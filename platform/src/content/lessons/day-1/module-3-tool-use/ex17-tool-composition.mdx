@@ -1,0 +1,318 @@
+---
+title: "Tool Composition & Factories"
+description: "Compose simple tools into complex operations, build higher-order tool patterns, and create tool factories for reusable functionality."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 17
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "composition", "higher-order", "factories", "design-patterns", "advanced"]
+---
+
+## What You'll Learn
+
+- Composing simple tools into more powerful compound tools
+- Higher-order tool patterns (tools that create tools)
+- Factory functions for generating tool definitions from configuration
+- When to compose in code vs. let the LLM compose via chaining
+
+## Key Concepts
+
+### What Is Tool Composition?
+
+Tool composition means combining simple, focused tools into more complex operations. Instead of building one monolithic "do everything" tool, you build small tools and compose them.
+
+```
+Simple tools:         → Composed tool:
+  fetch_url           → scrape_and_summarize(url)
+  extract_text           = fetch_url(url)
+  summarize_text           + extract_text(html)
+                           + summarize_text(text)
+```
+
+### Composing Tools in Code
+
+Create composed handlers that internally call multiple simpler handlers:
+
+```typescript
+// Simple tool handlers
+async function fetchUrl(url: string): Promise<string> {
+  const response = await fetch(url);
+  return response.text();
+}
+
+function extractText(html: string): string {
+  // Strip HTML tags (simplified)
+  return html.replace(/<[^>]*>/g, "").trim();
+}
+
+async function summarize(text: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 200,
+    messages: [{ role: "user", content: `Summarize this in 2 sentences: ${text.substring(0, 2000)}` }],
+  });
+  const block = response.content[0];
+  return block.type === "text" ? block.text : "";
+}
+
+// Composed handler: combines all three
+async function scrapeAndSummarize(url: string): Promise<string> {
+  const html = await fetchUrl(url);
+  const text = extractText(html);
+  const summary = await summarize(text);
+  return JSON.stringify({ url, summary, textLength: text.length });
+}
+```
+
+### The Compose Function
+
+A reusable utility to compose tool handlers into pipelines:
+
+```typescript
+type ToolFn = (input: any) => Promise<any>;
+
+function compose(...fns: ToolFn[]): ToolFn {
+  return async (input: any) => {
+    let result = input;
+    for (const fn of fns) {
+      result = await fn(result);
+    }
+    return result;
+  };
+}
+
+// Usage
+const processDocument = compose(
+  async (input: { url: string }) => {
+    const response = await fetch(input.url);
+    return { ...input, html: await response.text() };
+  },
+  async (input: { url: string; html: string }) => {
+    const text = input.html.replace(/<[^>]*>/g, "").trim();
+    return { ...input, text };
+  },
+  async (input: { url: string; text: string }) => {
+    return JSON.stringify({
+      url: input.url,
+      wordCount: input.text.split(/\s+/).length,
+      preview: input.text.substring(0, 200),
+    });
+  }
+);
+```
+
+### Tool Factories
+
+A tool factory is a function that generates tool definitions and handlers from configuration. This is useful when you have many similar tools:
+
+```typescript
+interface CrudToolConfig {
+  resource: string;             // e.g. "user", "product", "order"
+  description: string;          // What this resource is
+  searchableFields: string[];   // Fields that can be searched
+  displayFields: string[];      // Fields to include in results
+  dataSource: Record<string, unknown>[]; // The data (or a fetch function)
+}
+
+function createCrudTools(config: CrudToolConfig): {
+  definitions: Anthropic.Tool[];
+  handlers: Record<string, (input: Record<string, unknown>) => Promise<string>>;
+} {
+  const { resource, description, searchableFields, displayFields, dataSource } = config;
+
+  const definitions: Anthropic.Tool[] = [
+    {
+      name: `list_${resource}s`,
+      description: `List all ${description}s. Returns up to 10 results.`,
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          limit: {
+            type: "number",
+            description: "Max results to return (default 10)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: `search_${resource}s`,
+      description: `Search ${description}s by ${searchableFields.join(", ")}.`,
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          query: {
+            type: "string",
+            description: `Search query. Searches across: ${searchableFields.join(", ")}`,
+          },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: `get_${resource}`,
+      description: `Get a single ${description} by its ID.`,
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          id: {
+            type: "string",
+            description: `The ${resource} ID`,
+          },
+        },
+        required: ["id"],
+      },
+    },
+  ];
+
+  const handlers: Record<string, (input: Record<string, unknown>) => Promise<string>> = {
+    [`list_${resource}s`]: async (input) => {
+      const limit = (input.limit as number) || 10;
+      const results = dataSource.slice(0, limit).map((item) =>
+        Object.fromEntries(displayFields.map((f) => [f, (item as any)[f]]))
+      );
+      return JSON.stringify({ results, total: dataSource.length });
+    },
+
+    [`search_${resource}s`]: async (input) => {
+      const query = (input.query as string).toLowerCase();
+      const results = dataSource
+        .filter((item) =>
+          searchableFields.some((field) =>
+            String((item as any)[field]).toLowerCase().includes(query)
+          )
+        )
+        .slice(0, 10)
+        .map((item) =>
+          Object.fromEntries(displayFields.map((f) => [f, (item as any)[f]]))
+        );
+      return JSON.stringify({ results, total: results.length });
+    },
+
+    [`get_${resource}`]: async (input) => {
+      const item = dataSource.find((i) => (i as any).id === input.id);
+      if (!item) {
+        return JSON.stringify({ error: `${resource} not found: ${input.id}` });
+      }
+      return JSON.stringify(item);
+    },
+  };
+
+  return { definitions, handlers };
+}
+```
+
+### Using the Factory
+
+```typescript
+// Generate tools for multiple resources from config
+const userTools = createCrudTools({
+  resource: "user",
+  description: "user account",
+  searchableFields: ["name", "email", "department"],
+  displayFields: ["id", "name", "email", "role"],
+  dataSource: usersData,
+});
+
+const productTools = createCrudTools({
+  resource: "product",
+  description: "product in the catalog",
+  searchableFields: ["name", "category", "description"],
+  displayFields: ["id", "name", "price", "category"],
+  dataSource: productsData,
+});
+
+// Combine all tool definitions
+const allTools: Anthropic.Tool[] = [
+  ...userTools.definitions,
+  ...productTools.definitions,
+];
+
+// Combine all handlers
+const allHandlers: Record<string, (input: Record<string, unknown>) => Promise<string>> = {
+  ...userTools.handlers,
+  ...productTools.handlers,
+};
+```
+
+### Higher-Order Tool Patterns
+
+Tools that modify other tools' behavior:
+
+```typescript
+// Add caching to any tool handler
+function withCache(
+  handler: (input: Record<string, unknown>) => Promise<string>,
+  ttlMs: number = 60000
+): (input: Record<string, unknown>) => Promise<string> {
+  const cache = new Map<string, { data: string; expiry: number }>();
+
+  return async (input) => {
+    const key = JSON.stringify(input);
+    const cached = cache.get(key);
+
+    if (cached && cached.expiry > Date.now()) {
+      return cached.data;
+    }
+
+    const result = await handler(input);
+    cache.set(key, { data: result, expiry: Date.now() + ttlMs });
+    return result;
+  };
+}
+
+// Add logging to any tool handler
+function withLogging(
+  toolName: string,
+  handler: (input: Record<string, unknown>) => Promise<string>
+): (input: Record<string, unknown>) => Promise<string> {
+  return async (input) => {
+    const start = Date.now();
+    console.log(`[${toolName}] Called with:`, JSON.stringify(input));
+
+    try {
+      const result = await handler(input);
+      console.log(`[${toolName}] Completed in ${Date.now() - start}ms`);
+      return result;
+    } catch (error) {
+      console.error(`[${toolName}] Failed after ${Date.now() - start}ms:`, error);
+      throw error;
+    }
+  };
+}
+
+// Compose higher-order wrappers
+const enhancedHandler = withLogging(
+  "search_products",
+  withCache(productTools.handlers.search_products, 30000)
+);
+```
+
+### When to Compose in Code vs. Let the LLM Chain
+
+| Compose in Code | Let the LLM Chain |
+|-----------------|-------------------|
+| Fixed, predictable pipelines | Dynamic, context-dependent workflows |
+| Performance-critical paths | Exploratory tasks |
+| Reduce API calls | Flexibility is more important than speed |
+| The steps never change | The LLM needs to decide the next step |
+
+## Common Mistakes
+
+1. **Over-composing** -- If a composed tool does 5 things, it becomes hard to debug and inflexible. Keep compositions to 2-3 steps.
+
+2. **Not exposing individual tools** -- Even if you have a composed tool, expose the simple tools too. The LLM might only need one step.
+
+3. **Factory-generated tools with bad names** -- `list_items` is too generic. Make sure factory outputs have descriptive, unique names.
+
+4. **Ignoring error propagation** -- In a composed pipeline, if step 2 of 3 fails, the error message should say which step failed and why.
+
+5. **Creating too many tools with factories** -- If you generate CRUD tools for 10 resources, that's 30 tool definitions. The LLM has to read all of them. Consider grouping or limiting.
+
+## Your Task
+
+Build a tool factory that generates tools for a REST-like resource. Given a configuration object with `resource name`, `fields`, `searchable fields`, and `mock data`, it should produce three tools: `list`, `search`, and `get`.
+
+Then use the factory to create tools for two resources: **books** and **authors**. Add a composed tool called `find_books_by_author` that internally uses `search_authors` to find the author ID, then `search_books` to find their books. Wrap all handlers with logging and caching using the higher-order patterns.

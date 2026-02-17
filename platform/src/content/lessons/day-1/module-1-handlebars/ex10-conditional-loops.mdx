@@ -1,0 +1,228 @@
+---
+title: "Conditional Loops"
+description: "Combining if blocks inside each loops for filtering, conditional rendering, and report generation."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 10
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["handlebars", "templates", "each", "if", "conditional-rendering", "filtering", "reports"]
+---
+
+## What You'll Learn
+
+You will learn how to combine `{{#if}}` inside `{{#each}}` to conditionally render items in a list, apply different formatting based on item properties, and build structured reports with conditional logic.
+
+## Key Concepts
+
+### Conditionals Inside Loops
+
+The most common combination in Handlebars is using `{{#if}}` inside `{{#each}}`. This lets you decide what to render for each item based on its properties:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(`
+{{#each tasks}}
+- [{{#if this.completed}}x{{else}} {{/if}}] {{this.title}}
+{{/each}}
+`);
+
+const result = template({
+  tasks: [
+    { title: "Set up project", completed: true },
+    { title: "Write templates", completed: true },
+    { title: "Add tests", completed: false },
+    { title: "Deploy", completed: false },
+  ],
+});
+// "- [x] Set up project"
+// "- [x] Write templates"
+// "- [ ] Add tests"
+// "- [ ] Deploy"
+```
+
+Each item in the array is checked individually. The `{{#if this.completed}}` block runs independently for every iteration.
+
+### Filtering with Conditionals
+
+While Handlebars does not have a built-in filter mechanism, you can simulate filtering by only rendering content when a condition is met:
+
+```typescript
+const template = Handlebars.compile(`
+Critical Alerts:
+{{#each alerts}}
+{{#if this.isCritical}}
+- [CRITICAL] {{this.message}} ({{this.timestamp}})
+{{/if}}
+{{/each}}
+
+Other Alerts:
+{{#each alerts}}
+{{#unless this.isCritical}}
+- [INFO] {{this.message}} ({{this.timestamp}})
+{{/unless}}
+{{/each}}
+`);
+
+const result = template({
+  alerts: [
+    { message: "Server down", isCritical: true, timestamp: "10:30 AM" },
+    { message: "High memory usage", isCritical: false, timestamp: "10:32 AM" },
+    { message: "Database connection lost", isCritical: true, timestamp: "10:35 AM" },
+    { message: "Cache miss rate high", isCritical: false, timestamp: "10:40 AM" },
+  ],
+});
+```
+
+Notice that we iterate over the same array twice -- once for critical alerts, once for non-critical. This is not ideal for performance, but it is a straightforward pattern in Handlebars. For better efficiency, split the array before passing it to the template.
+
+### Conditional Formatting Based on Values
+
+You can apply different formatting to items based on their properties:
+
+```typescript
+const template = Handlebars.compile(`
+Student Report:
+{{#each students}}
+{{this.name}}: {{this.score}}%
+  {{#if this.passed}}
+  Status: PASSED
+  {{else}}
+  Status: NEEDS IMPROVEMENT
+  Recommendation: {{this.recommendation}}
+  {{/if}}
+{{/each}}
+`);
+
+const result = template({
+  students: [
+    { name: "Alice", score: 95, passed: true },
+    { name: "Bob", score: 62, passed: false, recommendation: "Review chapters 4-6" },
+    { name: "Carol", score: 88, passed: true },
+  ],
+});
+```
+
+The conditional inside the loop adds extra information only for students who did not pass.
+
+### Building Reports with Multiple Conditions
+
+Real reports often need several conditional checks per item:
+
+```typescript
+const template = Handlebars.compile(`
+API Health Report
+=================
+{{#each endpoints}}
+{{this.name}} ({{this.url}}):
+  Response Time: {{this.responseMs}}ms
+  {{#if this.isHealthy}}
+  Status: Healthy
+  {{else}}
+  Status: UNHEALTHY
+  {{#if this.lastError}}
+  Last Error: {{this.lastError}}
+  {{/if}}
+  {{#if this.downSince}}
+  Down Since: {{this.downSince}}
+  {{/if}}
+  {{/if}}
+{{/each}}
+
+Summary:
+Total Endpoints: {{totalCount}}
+{{#if hasUnhealthy}}
+WARNING: {{unhealthyCount}} endpoint(s) are unhealthy.
+{{else}}
+All endpoints are healthy.
+{{/if}}
+`);
+
+const report = template({
+  endpoints: [
+    { name: "Auth API", url: "/api/auth", responseMs: 45, isHealthy: true },
+    {
+      name: "Data API",
+      url: "/api/data",
+      responseMs: 5200,
+      isHealthy: false,
+      lastError: "Connection timeout",
+      downSince: "2024-01-15 14:30",
+    },
+    { name: "Search API", url: "/api/search", responseMs: 120, isHealthy: true },
+  ],
+  totalCount: 3,
+  hasUnhealthy: true,
+  unhealthyCount: 1,
+});
+```
+
+### Conditional Loops in AI Engineering
+
+When building AI prompts, you often need to include different types of context based on what is available:
+
+```typescript
+const template = Handlebars.compile(`
+You are a code review assistant. Review the following changes:
+
+{{#each files}}
+File: {{this.path}}
+{{#if this.isNew}}
+(New file)
+{{/if}}
+{{#if this.isDeleted}}
+(Deleted file - review for any lost functionality)
+{{/if}}
+
+{{#if this.changes}}
+Changes:
+{{#each this.changes}}
+  Line {{this.line}}: {{this.type}} - {{this.content}}
+  {{#if this.isBreakingChange}}
+  WARNING: This may be a breaking change. Explain the impact.
+  {{/if}}
+{{/each}}
+{{else}}
+No changes detected in this file.
+{{/if}}
+
+{{/each}}
+
+Provide a summary of the review with any concerns.
+`);
+```
+
+This prompt adapts based on the properties of each file in the review -- new files get one label, deleted files get another, and breaking changes get special attention.
+
+### The Pattern: Iterate, Then Decide
+
+The general pattern is:
+
+1. **`{{#each}}`** to iterate over items
+2. **`{{#if}}`** inside the loop to make per-item decisions
+3. Optionally, **`{{#each}}`** again inside the conditional for nested data
+
+```typescript
+{{#each items}}           // For each item...
+  {{#if this.flag}}       //   If this item has the flag...
+    {{#each this.tags}}   //     Render each of its tags
+      {{this}}
+    {{/each}}
+  {{/if}}
+{{/each}}
+```
+
+This three-level nesting (loop-condition-loop) is about as deep as you should go in a template. Beyond that, restructure your data in JavaScript before passing it to the template.
+
+## Common Mistakes
+
+- **Iterating the same array multiple times to "filter" it.** While this works, it is inefficient. If you need filtered subsets, create them in JavaScript and pass separate arrays to the template.
+- **Forgetting context shifts when combining `{{#each}}` and `{{#if}}`.** The `{{#if}}` block does not change the context, but `{{#each}}` does. Inside `{{#each this.items}}{{#if this.active}}`, the `this` in the `{{#if}}` still refers to the current `{{#each}}` item.
+- **Not pre-computing summary values.** In the report example, `totalCount`, `hasUnhealthy`, and `unhealthyCount` were computed before rendering. Do not try to count items inside a Handlebars template -- compute aggregates in JavaScript.
+- **Creating templates that are too complex.** If your template has more than three levels of nesting (loop inside conditional inside loop), it is time to simplify your data structure or use helpers.
+
+## Your Task
+
+Build a report template that iterates over a list of items and applies conditional formatting based on each item's properties. Include at least two different conditional paths (such as success/failure states) and a summary section that uses pre-computed aggregate values.

@@ -1,0 +1,413 @@
+---
+title: "Robust Classification: Combining Techniques"
+description: "Combine few-shot prompting, chain of thought, and JSON output for highly accurate classification with multi-layer prompt strategies."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 14
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["llm", "api", "classification", "few-shot", "chain-of-thought", "json", "accuracy", "robust"]
+---
+
+## What You'll Learn
+
+- How to combine multiple prompting techniques for maximum accuracy
+- Building a multi-layer classification pipeline
+- Confidence scoring and threshold-based routing
+- Handling ambiguous and edge-case inputs
+- Measuring and improving classification accuracy systematically
+
+## Key Concepts
+
+### Why Combine Techniques?
+
+Each technique you have learned solves a different problem:
+
+- **Few-shot** examples show the model what correct output looks like
+- **Chain of thought** helps the model reason through ambiguous cases
+- **Structured output** ensures you get parseable, consistent results
+
+Alone, each technique improves accuracy by 5-15%. Combined, the improvement compounds. For production classification, you want all three working together.
+
+### The Robust Classification Pattern
+
+Here is the architecture:
+
+```
+Input
+  ↓
+Few-Shot Examples (relevant to input)
+  ↓
+Chain of Thought (reasoning about the classification)
+  ↓
+Structured JSON Output (category + confidence + reasoning)
+  ↓
+Validation + Confidence Check
+  ↓
+Final Classification (or escalate if low confidence)
+```
+
+### Implementation
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+
+const client = new Anthropic();
+
+// Step 1: Define the output schema
+const ClassificationSchema = z.object({
+  category: z.string(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  alternativeCategory: z.string().nullable(),
+  alternativeConfidence: z.number().min(0).max(1).nullable(),
+});
+
+type ClassificationResult = z.infer<typeof ClassificationSchema>;
+
+// Step 2: Define the example pool
+interface ClassExample {
+  input: string;
+  category: string;
+  reasoning: string;
+}
+
+const examplePool: ClassExample[] = [
+  {
+    input: "I was charged $49.99 but my plan is $29.99",
+    category: "billing",
+    reasoning:
+      "The customer mentions specific dollar amounts and a discrepancy between what they were charged and their plan price. This is clearly a billing issue.",
+  },
+  {
+    input: "The app keeps freezing when I try to upload a photo",
+    category: "technical",
+    reasoning:
+      "The customer describes a specific technical behavior (freezing) triggered by a specific action (uploading). This is a technical/bug issue.",
+  },
+  {
+    input: "How do I change my password?",
+    category: "account",
+    reasoning:
+      "The customer is asking about account management functionality (password change). This is an account-related question.",
+  },
+  {
+    input: "I want to cancel my subscription and get a refund",
+    category: "billing",
+    reasoning:
+      "While cancellation could be 'account', the mention of refund makes this primarily a billing issue since it involves money.",
+  },
+  {
+    input: "Your website is showing a 404 error on the pricing page",
+    category: "technical",
+    reasoning:
+      "A 404 error is a technical issue with the website. Even though it's on a pricing page, the problem itself is technical.",
+  },
+  {
+    input: "Can I add another user to my team account?",
+    category: "account",
+    reasoning:
+      "Adding users to an account is an account management question, not billing (even though it might affect pricing).",
+  },
+];
+
+// Step 3: Build the combined prompt
+function buildClassificationPrompt(
+  input: string,
+  examples: ClassExample[],
+  categories: string[]
+): string {
+  const categoryList = categories.join(", ");
+
+  const exampleText = examples
+    .map(
+      (ex) => `<example>
+<input>${ex.input}</input>
+<reasoning>${ex.reasoning}</reasoning>
+<category>${ex.category}</category>
+</example>`
+    )
+    .join("\n");
+
+  return `Classify the following customer support message into one of these categories: ${categoryList}.
+
+<instructions>
+1. First, read the input carefully
+2. Think through which category best fits, considering the examples
+3. Consider if the message could fit multiple categories
+4. Choose the primary category and rate your confidence
+5. If another category is plausible, note it as an alternative
+</instructions>
+
+<examples>
+${exampleText}
+</examples>
+
+<output_format>
+Respond with a JSON object:
+{
+  "category": "the primary category",
+  "confidence": 0.0 to 1.0,
+  "reasoning": "your step-by-step reasoning",
+  "alternativeCategory": "second most likely category or null",
+  "alternativeConfidence": confidence for alternative or null
+}
+</output_format>
+
+<input>
+${input}
+</input>
+
+Think through this step by step, then provide your JSON classification.`;
+}
+
+// Step 4: The robust classifier
+async function robustClassify(
+  input: string,
+  categories: string[] = ["billing", "technical", "account", "general"]
+): Promise<ClassificationResult> {
+  // Select relevant examples (simplified - use dynamic selection in production)
+  const examples = examplePool.slice(0, 4);
+
+  const prompt = buildClassificationPrompt(input, examples, categories);
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 512,
+    temperature: 0,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  // Extract JSON from response (model might include reasoning text before JSON)
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("No JSON found in response");
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return ClassificationSchema.parse(parsed);
+}
+```
+
+### Confidence-Based Routing
+
+Not all classifications are equal. Use confidence scores to handle uncertain cases:
+
+```typescript
+interface ClassificationDecision {
+  result: ClassificationResult;
+  action: "accept" | "review" | "escalate";
+}
+
+function makeDecision(result: ClassificationResult): ClassificationDecision {
+  const HIGH_CONFIDENCE = 0.85;
+  const LOW_CONFIDENCE = 0.5;
+
+  if (result.confidence >= HIGH_CONFIDENCE) {
+    return { result, action: "accept" };
+  }
+
+  if (result.confidence >= LOW_CONFIDENCE) {
+    // Moderate confidence - check if alternative is close
+    if (
+      result.alternativeConfidence &&
+      result.confidence - result.alternativeConfidence < 0.15
+    ) {
+      return { result, action: "review" }; // Too close to call
+    }
+    return { result, action: "accept" };
+  }
+
+  return { result, action: "escalate" }; // Low confidence, needs human review
+}
+
+// Process a batch with routing
+async function classifyBatch(
+  inputs: string[]
+): Promise<{
+  accepted: ClassificationDecision[];
+  needsReview: ClassificationDecision[];
+  escalated: ClassificationDecision[];
+}> {
+  const accepted: ClassificationDecision[] = [];
+  const needsReview: ClassificationDecision[] = [];
+  const escalated: ClassificationDecision[] = [];
+
+  for (const input of inputs) {
+    const result = await robustClassify(input);
+    const decision = makeDecision(result);
+
+    switch (decision.action) {
+      case "accept":
+        accepted.push(decision);
+        break;
+      case "review":
+        needsReview.push(decision);
+        break;
+      case "escalate":
+        escalated.push(decision);
+        break;
+    }
+  }
+
+  console.log(`Accepted: ${accepted.length}`);
+  console.log(`Needs review: ${needsReview.length}`);
+  console.log(`Escalated: ${escalated.length}`);
+
+  return { accepted, needsReview, escalated };
+}
+```
+
+### Multi-Pass Classification
+
+For the highest accuracy, classify twice and compare:
+
+```typescript
+async function multiPassClassify(input: string): Promise<ClassificationResult> {
+  // Pass 1: Standard classification
+  const pass1 = await robustClassify(input);
+
+  // If high confidence, accept immediately
+  if (pass1.confidence > 0.9) {
+    return pass1;
+  }
+
+  // Pass 2: Reclassify with a different prompt structure
+  const pass2Response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 256,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `A previous classifier categorized this message as "${pass1.category}" with ${(pass1.confidence * 100).toFixed(0)}% confidence.
+
+Message: "${input}"
+
+Do you agree with this classification? If not, what is the correct category (billing, technical, account, general)?
+
+Respond as JSON: {"agree": boolean, "category": "...", "confidence": 0.X, "reasoning": "..."}`,
+      },
+    ],
+  });
+
+  const text =
+    pass2Response.content[0].type === "text" ? pass2Response.content[0].text : "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  if (jsonMatch) {
+    const pass2 = JSON.parse(jsonMatch[0]);
+
+    if (pass2.agree) {
+      // Both agree - boost confidence
+      return {
+        ...pass1,
+        confidence: Math.min(1, pass1.confidence + 0.1),
+      };
+    } else {
+      // Disagreement - use the one with higher confidence, but flag it
+      return {
+        category: pass2.category,
+        confidence: Math.min(pass1.confidence, pass2.confidence),
+        reasoning: `Pass 1: ${pass1.category} (${pass1.confidence}). Pass 2: ${pass2.category} (${pass2.confidence}). Using pass 2 result.`,
+        alternativeCategory: pass1.category,
+        alternativeConfidence: pass1.confidence,
+      };
+    }
+  }
+
+  return pass1; // Fallback to pass 1 if pass 2 fails
+}
+```
+
+### Measuring Classification Accuracy
+
+```typescript
+interface AccuracyReport {
+  totalTests: number;
+  correct: number;
+  accuracy: number;
+  confusionMatrix: Record<string, Record<string, number>>;
+  avgConfidence: number;
+  lowConfidenceCount: number;
+}
+
+function calculateAccuracy(
+  results: Array<{
+    predicted: string;
+    actual: string;
+    confidence: number;
+  }>
+): AccuracyReport {
+  const categories = [...new Set(results.map((r) => r.actual))];
+  const confusionMatrix: Record<string, Record<string, number>> = {};
+
+  // Initialize matrix
+  for (const actual of categories) {
+    confusionMatrix[actual] = {};
+    for (const predicted of categories) {
+      confusionMatrix[actual][predicted] = 0;
+    }
+  }
+
+  let correct = 0;
+  let totalConfidence = 0;
+  let lowConfidenceCount = 0;
+
+  for (const result of results) {
+    if (confusionMatrix[result.actual]) {
+      confusionMatrix[result.actual][result.predicted] =
+        (confusionMatrix[result.actual][result.predicted] || 0) + 1;
+    }
+    if (result.predicted === result.actual) correct++;
+    totalConfidence += result.confidence;
+    if (result.confidence < 0.7) lowConfidenceCount++;
+  }
+
+  return {
+    totalTests: results.length,
+    correct,
+    accuracy: correct / results.length,
+    confusionMatrix,
+    avgConfidence: totalConfidence / results.length,
+    lowConfidenceCount,
+  };
+}
+```
+
+## Common Mistakes
+
+1. **Not validating the JSON output**: Even with structured output prompts, the model can produce invalid JSON. Always parse and validate with Zod before using the result.
+
+2. **Ignoring low-confidence classifications**: A classification with 0.5 confidence is essentially a coin flip. Build routing logic that escalates uncertain cases rather than treating all outputs equally.
+
+3. **Over-engineering for simple tasks**: If you are classifying into 2-3 obvious categories, you do not need multi-pass classification. Reserve the complex pipeline for tasks with subtle category boundaries.
+
+4. **Not building a confusion matrix**: Accuracy alone does not tell the full story. A confusion matrix shows you *which* categories are confused with each other, guiding you to add better examples for those specific pairs.
+
+5. **Fixed confidence thresholds**: The right threshold depends on the cost of errors. Medical triage needs higher confidence than email sorting. Adjust thresholds based on the business impact of misclassification.
+
+## Your Task
+
+Build a robust classification system that:
+
+1. Combines few-shot examples, chain-of-thought reasoning, and structured JSON output in a single prompt
+2. Implements confidence-based routing (accept / review / escalate)
+3. Validates all output with Zod schemas
+4. Includes at least 6 few-shot examples with reasoning traces
+5. Tests on at least 10 inputs, including ambiguous edge cases
+6. Produces an accuracy report with a confusion matrix
+
+Create a classifier for one of these domains:
+- Customer support ticket routing (billing / technical / account / general)
+- Content moderation (safe / warning / blocked)
+- Email priority classification (urgent / important / normal / low)
+
+Print the full accuracy report, including the confusion matrix, confidence distribution, and examples of misclassifications.
+
+Bonus: Implement multi-pass classification and show that it improves accuracy on the cases that single-pass got wrong.

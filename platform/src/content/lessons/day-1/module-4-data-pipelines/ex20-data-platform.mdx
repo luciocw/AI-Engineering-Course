@@ -1,0 +1,575 @@
+---
+title: "Data Platform Capstone"
+description: "Grand capstone combining Modules 1-4: build a complete data platform with Handlebars templates, LLM API, tool calling, and data pipelines."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 20
+difficulty: "advanced"
+estimatedMinutes: 45
+isFree: true
+tags: ["data", "pipelines", "capstone", "etl", "llm", "tools", "handlebars", "full-stack"]
+---
+
+## What You'll Learn
+
+You will build a complete data platform that combines everything from Modules 1 through 4. This capstone integrates Handlebars templates (M1), LLM API calls (M2), tool calling (M3), and data pipeline patterns (M4) into a single cohesive system. By the end, you will have built a production-grade data processing platform.
+
+## Key Concepts
+
+### The Big Picture
+
+A real AI-powered data platform has many moving parts. Here is what you are building:
+
+1. **Data ingestion** (M4): Extract data from CSV files and normalize it
+2. **Validation and cleaning** (M4): Validate with Zod schemas and clean dirty data
+3. **AI enrichment** (M2 + M3): Use LLM API with tools to classify and enrich records
+4. **Report generation** (M1 + M4): Use Handlebars templates to produce formatted reports
+5. **Context building** (M4): Prepare data for LLM-powered Q&A
+
+This is the architecture behind platforms like customer intelligence dashboards, automated compliance systems, and AI-powered analytics tools.
+
+### Platform Architecture
+
+```typescript
+interface DataPlatform {
+  // Ingestion layer
+  ingest(source: string, format: "csv" | "json"): Promise<IngestResult>;
+
+  // Processing layer
+  validate(records: unknown[]): ValidationResult;
+  clean(records: ValidRecord[]): CleanResult;
+  enrich(records: CleanRecord[]): Promise<EnrichResult>;
+
+  // AI layer
+  classify(records: EnrichedRecord[]): Promise<ClassifyResult>;
+  query(question: string, data: ProcessedRecord[]): Promise<QueryResult>;
+
+  // Output layer
+  generateReport(
+    data: ProcessedRecord[],
+    template: string
+  ): string;
+  export(
+    data: ProcessedRecord[],
+    format: "csv" | "json" | "markdown"
+  ): string;
+}
+```
+
+### Step 1: Data Ingestion Layer
+
+Build the entry point that accepts data from multiple sources:
+
+```typescript
+import { parse } from "csv-parse/sync";
+import { readFileSync } from "fs";
+import { z } from "zod";
+
+interface IngestResult {
+  records: Record<string, unknown>[];
+  source: string;
+  format: string;
+  rawCount: number;
+}
+
+class IngestionLayer {
+  async ingest(
+    source: string,
+    format: "csv" | "json"
+  ): Promise<IngestResult> {
+    const raw = readFileSync(source, "utf-8");
+
+    let records: Record<string, unknown>[];
+    if (format === "csv") {
+      records = parse(raw, {
+        columns: true,
+        skip_empty_lines: true,
+      });
+    } else {
+      const parsed = JSON.parse(raw);
+      records = Array.isArray(parsed) ? parsed : [parsed];
+    }
+
+    return {
+      records,
+      source,
+      format,
+      rawCount: records.length,
+    };
+  }
+}
+```
+
+### Step 2: Validation and Cleaning Layer
+
+Apply the Zod validation and cleaning patterns from earlier exercises:
+
+```typescript
+const RecordSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  category: z.string().min(1),
+  value: z.union([z.number(), z.string().transform((v) => parseFloat(v))]),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  description: z.string().default(""),
+});
+
+type ValidRecord = z.infer<typeof RecordSchema>;
+
+interface ValidationResult {
+  valid: ValidRecord[];
+  invalid: Array<{ record: unknown; errors: string[] }>;
+}
+
+interface CleanResult {
+  cleaned: ValidRecord[];
+  duplicatesRemoved: number;
+  fieldsNormalized: number;
+}
+
+class ProcessingLayer {
+  validate(records: unknown[]): ValidationResult {
+    const valid: ValidRecord[] = [];
+    const invalid: Array<{ record: unknown; errors: string[] }> = [];
+
+    for (const record of records) {
+      const result = RecordSchema.safeParse(record);
+      if (result.success) {
+        valid.push(result.data);
+      } else {
+        invalid.push({
+          record,
+          errors: result.error.issues.map(
+            (i) => `${i.path.join(".")}: ${i.message}`
+          ),
+        });
+      }
+    }
+
+    return { valid, invalid };
+  }
+
+  clean(records: ValidRecord[]): CleanResult {
+    let fieldsNormalized = 0;
+
+    // Normalize strings
+    const normalized = records.map((r) => {
+      const cleaned = {
+        ...r,
+        name: r.name.trim(),
+        category: r.category.trim().toLowerCase(),
+        description: r.description.trim(),
+      };
+      if (JSON.stringify(cleaned) !== JSON.stringify(r)) fieldsNormalized++;
+      return cleaned;
+    });
+
+    // Deduplicate
+    const seen = new Set<string>();
+    const deduped = normalized.filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+
+    return {
+      cleaned: deduped,
+      duplicatesRemoved: normalized.length - deduped.length,
+      fieldsNormalized,
+    };
+  }
+}
+```
+
+### Step 3: AI Enrichment Layer
+
+Use LLM API and tools to add intelligence to your data:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+interface EnrichedRecord extends ValidRecord {
+  sentiment?: "positive" | "negative" | "neutral";
+  tags?: string[];
+  priority?: "high" | "medium" | "low";
+}
+
+interface EnrichResult {
+  enriched: EnrichedRecord[];
+  apiCalls: number;
+  cacheHits: number;
+  estimatedCost: number;
+}
+
+class AILayer {
+  private client: Anthropic;
+  private cache: Map<string, any> = new Map();
+
+  constructor() {
+    this.client = new Anthropic();
+  }
+
+  async classify(
+    records: ValidRecord[],
+    batchSize: number = 10
+  ): Promise<EnrichResult> {
+    const enriched: EnrichedRecord[] = [];
+    let apiCalls = 0;
+    let cacheHits = 0;
+
+    // Process in batches
+    for (let i = 0; i < records.length; i += batchSize) {
+      const batch = records.slice(i, i + batchSize);
+
+      // Check cache for each record
+      const needsClassification: ValidRecord[] = [];
+      for (const record of batch) {
+        const cacheKey = `${record.id}:${record.description}`;
+        const cached = this.cache.get(cacheKey);
+        if (cached) {
+          enriched.push({ ...record, ...cached });
+          cacheHits++;
+        } else {
+          needsClassification.push(record);
+        }
+      }
+
+      if (needsClassification.length === 0) continue;
+
+      // Batch classify with LLM
+      const recordList = needsClassification
+        .map((r) => `- ID: ${r.id}, Name: ${r.name}, Description: ${r.description}`)
+        .join("\n");
+
+      try {
+        const response = await this.client.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1024,
+          messages: [
+            {
+              role: "user",
+              content: `Classify each record's sentiment and assign priority and tags.
+
+Records:
+${recordList}
+
+Respond as JSON array:
+[{"id": "...", "sentiment": "positive|negative|neutral", "priority": "high|medium|low", "tags": ["tag1", "tag2"]}]`,
+            },
+          ],
+        });
+
+        apiCalls++;
+
+        const textBlock = response.content.find((b) => b.type === "text");
+        if (textBlock && textBlock.type === "text") {
+          const classifications = JSON.parse(textBlock.text);
+          for (const cls of classifications) {
+            const record = needsClassification.find((r) => r.id === cls.id);
+            if (record) {
+              const enrichment = {
+                sentiment: cls.sentiment,
+                priority: cls.priority,
+                tags: cls.tags,
+              };
+              enriched.push({ ...record, ...enrichment });
+              this.cache.set(`${record.id}:${record.description}`, enrichment);
+            }
+          }
+        }
+      } catch (error) {
+        // On API failure, add records without enrichment
+        for (const record of needsClassification) {
+          enriched.push(record);
+        }
+      }
+    }
+
+    const estimatedCost = apiCalls * 0.01; // Rough estimate
+
+    return { enriched, apiCalls, cacheHits, estimatedCost };
+  }
+
+  async query(
+    question: string,
+    data: EnrichedRecord[]
+  ): Promise<{ answer: string; tokensUsed: number }> {
+    // Build context from data
+    const context = data
+      .slice(0, 50) // Limit for context window
+      .map(
+        (r) =>
+          `- ${r.name} (${r.category}): value=${r.value}, sentiment=${r.sentiment ?? "unknown"}, priority=${r.priority ?? "unknown"}`
+      )
+      .join("\n");
+
+    const response = await this.client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: `Based on the following data, answer this question: ${question}
+
+Data (${data.length} records, showing top 50):
+${context}
+
+Provide a clear, data-driven answer.`,
+        },
+      ],
+    });
+
+    const textBlock = response.content.find((b) => b.type === "text");
+    const answer = textBlock?.type === "text" ? textBlock.text : "No answer generated";
+
+    return {
+      answer,
+      tokensUsed: response.usage.input_tokens + response.usage.output_tokens,
+    };
+  }
+}
+```
+
+### Step 4: Report Generation Layer
+
+Use Handlebars to produce formatted output:
+
+```typescript
+import Handlebars from "handlebars";
+
+class ReportLayer {
+  constructor() {
+    Handlebars.registerHelper("currency", (v: number) =>
+      new Handlebars.SafeString(`$${Number(v).toLocaleString()}`)
+    );
+    Handlebars.registerHelper("uppercase", (s: string) =>
+      new Handlebars.SafeString(String(s).toUpperCase())
+    );
+  }
+
+  generateReport(data: EnrichedRecord[], metrics: PlatformMetrics): string {
+    const template = Handlebars.compile(PLATFORM_REPORT_TEMPLATE);
+
+    const byCategory = this.groupBy(data, "category");
+    const bySentiment = this.groupBy(data, "sentiment");
+
+    return template({
+      title: "Data Platform Report",
+      generatedAt: new Date().toISOString(),
+      totalRecords: data.length,
+      categories: Object.entries(byCategory).map(([cat, records]) => ({
+        name: cat,
+        count: records.length,
+        totalValue: records.reduce((sum, r) => sum + Number(r.value), 0),
+      })),
+      sentimentBreakdown: {
+        positive: bySentiment["positive"]?.length ?? 0,
+        negative: bySentiment["negative"]?.length ?? 0,
+        neutral: bySentiment["neutral"]?.length ?? 0,
+      },
+      topRecords: [...data]
+        .sort((a, b) => Number(b.value) - Number(a.value))
+        .slice(0, 10),
+      metrics,
+    });
+  }
+
+  private groupBy<T>(items: T[], key: keyof T): Record<string, T[]> {
+    return items.reduce(
+      (groups, item) => {
+        const k = String(item[key] ?? "unknown");
+        (groups[k] ??= []).push(item);
+        return groups;
+      },
+      {} as Record<string, T[]>
+    );
+  }
+}
+
+const PLATFORM_REPORT_TEMPLATE = `# {{title}}
+Generated: {{generatedAt}}
+
+## Overview
+- **Total Records:** {{totalRecords}}
+- **API Calls:** {{metrics.apiCalls}}
+- **Cache Hits:** {{metrics.cacheHits}}
+- **Processing Time:** {{metrics.totalDurationMs}}ms
+
+## Sentiment Breakdown
+- Positive: {{sentimentBreakdown.positive}}
+- Negative: {{sentimentBreakdown.negative}}
+- Neutral: {{sentimentBreakdown.neutral}}
+
+## By Category
+
+| Category | Count | Total Value |
+|----------|-------|-------------|
+{{#each categories}}
+| {{uppercase this.name}} | {{this.count}} | {{currency this.totalValue}} |
+{{/each}}
+
+## Top 10 Records by Value
+
+| Name | Category | Value | Sentiment | Priority |
+|------|----------|-------|-----------|----------|
+{{#each topRecords}}
+| {{this.name}} | {{this.category}} | {{currency this.value}} | {{this.sentiment}} | {{this.priority}} |
+{{/each}}
+
+---
+*Pipeline Metrics: {{metrics.totalDurationMs}}ms total, {{metrics.validationMs}}ms validation, {{metrics.enrichmentMs}}ms enrichment*`;
+```
+
+### Step 5: The Platform Orchestrator
+
+Bring all layers together:
+
+```typescript
+interface PlatformMetrics {
+  totalDurationMs: number;
+  ingestionMs: number;
+  validationMs: number;
+  cleaningMs: number;
+  enrichmentMs: number;
+  reportMs: number;
+  recordsIngested: number;
+  recordsValid: number;
+  recordsCleaned: number;
+  recordsEnriched: number;
+  apiCalls: number;
+  cacheHits: number;
+  estimatedCost: number;
+}
+
+class DataPlatform {
+  private ingestion = new IngestionLayer();
+  private processing = new ProcessingLayer();
+  private ai = new AILayer();
+  private reports = new ReportLayer();
+
+  async run(
+    source: string,
+    format: "csv" | "json"
+  ): Promise<{
+    data: EnrichedRecord[];
+    report: string;
+    metrics: PlatformMetrics;
+  }> {
+    const totalStart = performance.now();
+    const metrics: Partial<PlatformMetrics> = {};
+
+    // 1. Ingest
+    const ingestStart = performance.now();
+    const ingested = await this.ingestion.ingest(source, format);
+    metrics.ingestionMs = performance.now() - ingestStart;
+    metrics.recordsIngested = ingested.rawCount;
+    console.log(`Ingested ${ingested.rawCount} records from ${source}`);
+
+    // 2. Validate
+    const validateStart = performance.now();
+    const validated = this.processing.validate(ingested.records);
+    metrics.validationMs = performance.now() - validateStart;
+    metrics.recordsValid = validated.valid.length;
+    console.log(
+      `Validated: ${validated.valid.length} valid, ${validated.invalid.length} invalid`
+    );
+
+    // 3. Clean
+    const cleanStart = performance.now();
+    const cleaned = this.processing.clean(validated.valid);
+    metrics.cleaningMs = performance.now() - cleanStart;
+    metrics.recordsCleaned = cleaned.cleaned.length;
+    console.log(
+      `Cleaned: ${cleaned.duplicatesRemoved} duplicates removed, ${cleaned.fieldsNormalized} fields normalized`
+    );
+
+    // 4. AI Enrich
+    const enrichStart = performance.now();
+    const enriched = await this.ai.classify(cleaned.cleaned);
+    metrics.enrichmentMs = performance.now() - enrichStart;
+    metrics.recordsEnriched = enriched.enriched.length;
+    metrics.apiCalls = enriched.apiCalls;
+    metrics.cacheHits = enriched.cacheHits;
+    metrics.estimatedCost = enriched.estimatedCost;
+    console.log(
+      `Enriched: ${enriched.apiCalls} API calls, ${enriched.cacheHits} cache hits`
+    );
+
+    // 5. Generate report
+    const reportStart = performance.now();
+    metrics.totalDurationMs = performance.now() - totalStart;
+    metrics.reportMs = 0; // Will be updated after report generation
+
+    const report = this.reports.generateReport(
+      enriched.enriched,
+      metrics as PlatformMetrics
+    );
+    metrics.reportMs = performance.now() - reportStart;
+    metrics.totalDurationMs = performance.now() - totalStart;
+
+    console.log(`\nPlatform run complete in ${metrics.totalDurationMs?.toFixed(0)}ms`);
+
+    return {
+      data: enriched.enriched,
+      report,
+      metrics: metrics as PlatformMetrics,
+    };
+  }
+
+  async askQuestion(
+    question: string,
+    data: EnrichedRecord[]
+  ): Promise<string> {
+    const result = await this.ai.query(question, data);
+    return result.answer;
+  }
+}
+```
+
+### Running the Platform
+
+```typescript
+async function main() {
+  const platform = new DataPlatform();
+
+  // Run the full pipeline
+  const { data, report, metrics } = await platform.run(
+    "data/records.csv",
+    "csv"
+  );
+
+  // Print the report
+  console.log(report);
+
+  // Ask questions about the data
+  const answer = await platform.askQuestion(
+    "Which category has the most negative sentiment and what should we focus on improving?",
+    data
+  );
+  console.log("\nAI Analysis:", answer);
+}
+```
+
+### Why This Matters
+
+This capstone demonstrates that AI Engineering is not about any single skill. It is about composing many skills into a working system:
+
+- **Templates** make your prompts dynamic and your reports readable
+- **LLM APIs** add intelligence to otherwise mechanical data processing
+- **Tool calling** lets your AI reach out to external systems
+- **Pipeline patterns** make everything reliable, efficient, and observable
+
+Every production AI application is built from these same building blocks. The difference between a prototype and a production system is exactly these patterns: validation, error handling, caching, metrics, and structured architecture.
+
+## Common Mistakes
+
+- **Building everything in one function.** Separate concerns into layers. Each layer should be testable independently.
+- **Not adding metrics.** Without timing and counts, you cannot know where to optimize or when something breaks.
+- **Skipping validation.** "It works in development" is not enough. Real data is messy. Validate everything.
+- **Not caching AI results.** During development, you will run the pipeline many times. Caching saves time and money.
+- **Ignoring error handling.** One bad record or one API timeout should not crash the entire platform.
+- **Over-engineering from the start.** Build the simplest version first, then add complexity (caching, incremental processing, multi-format export) as needed.
+
+## Your Task
+
+Build a complete data platform that: (1) ingests data from a CSV file, (2) validates with a Zod schema, (3) cleans and deduplicates, (4) enriches with LLM classification using batching and caching, (5) generates a formatted report using Handlebars, and (6) supports natural-language queries about the processed data. Track timing metrics for each stage and return a comprehensive platform result.

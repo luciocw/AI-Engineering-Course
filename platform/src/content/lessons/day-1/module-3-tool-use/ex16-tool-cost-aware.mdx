@@ -1,0 +1,283 @@
+---
+title: "Cost-Aware Tool Execution"
+description: "Integrate CostTracker from Module 2 with tool calls, implement budget-aware execution, and set cost limits to prevent runaway spending."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 16
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "cost-tracking", "budget", "module-2-integration", "advanced"]
+---
+
+## What You'll Learn
+
+- How tool calls affect token costs (tool definitions add to input tokens)
+- Integrating CostTracker from Module 2 into the tool loop
+- Setting per-request and session-wide budgets
+- Making cost-informed decisions about tool use
+
+## Key Concepts
+
+### How Tools Affect Costs
+
+When you include tools in an API call, the tool definitions are serialized and included in the input tokens. This means:
+
+1. **Tool definitions cost tokens** -- Each tool adds to your input cost on every request
+2. **Tool results are input tokens** -- When you send results back, those are input tokens too
+3. **Tool use loops multiply costs** -- Each iteration of the loop is a separate API call
+4. **More tools = higher base cost** -- Even if no tools are called, their definitions add to every request
+
+```typescript
+// Rough token costs for tool definitions:
+// - A simple tool (name + description + 2 params): ~100-150 tokens
+// - A complex tool (detailed description + 8 params): ~300-500 tokens
+// - 10 tools: ~1,500-3,000 tokens added to EVERY request
+
+// A 3-iteration tool loop costs roughly:
+// Call 1: system + tools + user message → response with tool_use
+// Call 2: system + tools + history + tool_result → response with tool_use
+// Call 3: system + tools + history + tool_result → final text response
+// Total: 3x the base input cost plus growing history
+```
+
+### Integrating CostTracker
+
+Bring in the `CostTracker` from Module 2 to monitor spending:
+
+```typescript
+// CostTracker from Module 2
+class CostTracker {
+  private totalInputTokens = 0;
+  private totalOutputTokens = 0;
+  private callCount = 0;
+
+  // Pricing per million tokens (Claude Sonnet)
+  private inputCostPerMillion = 3.0;
+  private outputCostPerMillion = 15.0;
+
+  track(usage: { input_tokens: number; output_tokens: number }): void {
+    this.totalInputTokens += usage.input_tokens;
+    this.totalOutputTokens += usage.output_tokens;
+    this.callCount++;
+  }
+
+  getCost(): { input: number; output: number; total: number } {
+    const input = (this.totalInputTokens / 1_000_000) * this.inputCostPerMillion;
+    const output = (this.totalOutputTokens / 1_000_000) * this.outputCostPerMillion;
+    return { input, output, total: input + output };
+  }
+
+  getStats(): {
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    cost: { input: number; output: number; total: number };
+  } {
+    return {
+      calls: this.callCount,
+      inputTokens: this.totalInputTokens,
+      outputTokens: this.totalOutputTokens,
+      cost: this.getCost(),
+    };
+  }
+}
+```
+
+### Budget-Aware Tool Loop
+
+Add cost checking to the tool use loop:
+
+```typescript
+interface BudgetConfig {
+  maxCostPerRequest: number; // Max cost for a single user request (in dollars)
+  maxCostPerSession: number; // Max cost for the entire session
+  maxIterations: number;     // Max tool loop iterations per request
+  warnAt: number;            // Warn when session cost reaches this percentage (0-1)
+}
+
+const defaultBudget: BudgetConfig = {
+  maxCostPerRequest: 0.10,  // $0.10 per request
+  maxCostPerSession: 1.00,  // $1.00 per session
+  maxIterations: 5,
+  warnAt: 0.8, // Warn at 80% of session budget
+};
+
+async function chatWithBudget(
+  userMessage: string,
+  sessionTracker: CostTracker,
+  budget: BudgetConfig = defaultBudget
+): Promise<{ response: string; costInfo: ReturnType<CostTracker["getStats"]> }> {
+  const requestTracker = new CostTracker();
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools,
+    messages,
+  });
+
+  // Track the cost of this call
+  requestTracker.track(response.usage);
+  sessionTracker.track(response.usage);
+
+  let iterations = 0;
+
+  while (response.stop_reason === "tool_use") {
+    iterations++;
+
+    // Check iteration limit
+    if (iterations > budget.maxIterations) {
+      console.warn(`Iteration limit reached (${budget.maxIterations})`);
+      break;
+    }
+
+    // Check per-request budget
+    if (requestTracker.getCost().total > budget.maxCostPerRequest) {
+      console.warn(
+        `Request budget exceeded: $${requestTracker.getCost().total.toFixed(4)} > $${budget.maxCostPerRequest}`
+      );
+      messages.push({ role: "assistant", content: response.content });
+      messages.push({
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: response.content.find((b) => b.type === "tool_use")!.id,
+          content: "Budget limit reached. Please provide your best answer with available information.",
+          is_error: true,
+        } as Anthropic.ToolResultBlockParam],
+      });
+      break;
+    }
+
+    // Check session budget
+    if (sessionTracker.getCost().total > budget.maxCostPerSession) {
+      return {
+        response: "I've reached the cost limit for this session. " +
+          "Please start a new session to continue.",
+        costInfo: sessionTracker.getStats(),
+      };
+    }
+
+    // Warn at threshold
+    const sessionCostRatio =
+      sessionTracker.getCost().total / budget.maxCostPerSession;
+    if (sessionCostRatio > budget.warnAt) {
+      console.warn(
+        `Session budget at ${(sessionCostRatio * 100).toFixed(0)}%: ` +
+          `$${sessionTracker.getCost().total.toFixed(4)} / $${budget.maxCostPerSession}`
+      );
+    }
+
+    // Execute tools
+    messages.push({ role: "assistant", content: response.content });
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        const result = await executeTool(block.name, block.input);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      }
+    }
+
+    messages.push({ role: "user", content: toolResults });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools,
+      messages,
+    });
+
+    requestTracker.track(response.usage);
+    sessionTracker.track(response.usage);
+  }
+
+  // Get final response (possibly one more call if we broke out of the loop)
+  if (response.stop_reason === "tool_use") {
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      messages,
+    });
+    requestTracker.track(response.usage);
+    sessionTracker.track(response.usage);
+  }
+
+  const text = response.content.find((b) => b.type === "text");
+  return {
+    response: text?.type === "text" ? text.text : "",
+    costInfo: sessionTracker.getStats(),
+  };
+}
+```
+
+### Cost-Aware Tool Selection
+
+Assign costs to individual tools and let the system make smart choices:
+
+```typescript
+interface CostAwareToolConfig {
+  definition: Anthropic.Tool;
+  handler: (input: Record<string, unknown>) => Promise<string>;
+  estimatedCost: number; // Estimated cost in dollars for executing this tool
+  priority: number;      // Higher = preferred when budget is tight
+}
+
+function selectAffordableTools(
+  allTools: CostAwareToolConfig[],
+  remainingBudget: number
+): CostAwareToolConfig[] {
+  // Sort by priority (highest first) and filter by cost
+  return allTools
+    .sort((a, b) => b.priority - a.priority)
+    .filter((tool) => tool.estimatedCost <= remainingBudget);
+}
+```
+
+### Logging and Reporting
+
+```typescript
+function printCostReport(tracker: CostTracker): void {
+  const stats = tracker.getStats();
+  console.log("\n--- Cost Report ---");
+  console.log(`API calls:      ${stats.calls}`);
+  console.log(`Input tokens:   ${stats.inputTokens.toLocaleString()}`);
+  console.log(`Output tokens:  ${stats.outputTokens.toLocaleString()}`);
+  console.log(`Input cost:     $${stats.cost.input.toFixed(4)}`);
+  console.log(`Output cost:    $${stats.cost.output.toFixed(4)}`);
+  console.log(`Total cost:     $${stats.cost.total.toFixed(4)}`);
+  console.log("-------------------\n");
+}
+```
+
+## Common Mistakes
+
+1. **Ignoring tool definition costs** -- Including 20 tools adds thousands of tokens to every request. Only include tools the user is likely to need.
+
+2. **No per-request budget** -- A single complex request can trigger 10+ tool calls. Without a limit, one request can burn through your entire budget.
+
+3. **Not tracking across the session** -- Individual call costs look small, but they add up over a long conversation. Track cumulatively.
+
+4. **Hard-stopping without explanation** -- When you hit a budget limit, tell the LLM why so it can explain to the user. Don't just drop the connection.
+
+5. **Forgetting that history grows** -- Each tool call adds to the message history, which increases input tokens on subsequent calls. Costs accelerate over time.
+
+## Your Task
+
+Build a cost-aware assistant that:
+
+1. Uses `CostTracker` from Module 2 to monitor every API call in the tool loop
+2. Sets a per-request budget of $0.05 and a session budget of $0.50
+3. Provides three tools: `search_web` (expensive -- triggers a long response), `get_cached_data` (cheap -- returns small data), and `calculate` (free -- runs locally)
+4. Dynamically reduces available tools as the budget runs low (removes expensive tools first)
+5. Prints a cost report after each user request
+
+Test with a series of questions that progressively consume the budget, and verify the system gracefully degrades as limits approach.

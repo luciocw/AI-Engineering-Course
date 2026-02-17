@@ -1,0 +1,363 @@
+---
+title: "API Parameters: Controlling Model Output"
+description: "Learn how temperature, max_tokens, stop_sequences, and top_p affect LLM output, and when to adjust each parameter."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 7
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["llm", "api", "temperature", "max-tokens", "stop-sequences", "top-p", "parameters"]
+---
+
+## What You'll Learn
+
+- What temperature does and how it affects output creativity
+- How max_tokens controls response length
+- Using stop_sequences to control where the model stops
+- What top_p (nucleus sampling) does
+- When and why to adjust each parameter for different use cases
+
+## Key Concepts
+
+### The Core Parameters
+
+Every LLM API call accepts parameters that control *how* the model generates text. These are separate from *what* you ask it to generate (the prompt). Understanding these parameters is the difference between getting inconsistent, unpredictable results and getting reliable, controlled output.
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024, // Maximum tokens to generate
+  temperature: 0.7, // Creativity dial (0.0 - 1.0)
+  top_p: 0.9, // Nucleus sampling threshold
+  stop_sequences: ["\n\n---"], // Stop generating when this appears
+  messages: [{ role: "user", content: "Write a short poem about coding." }],
+});
+```
+
+### Temperature: The Creativity Dial
+
+Temperature controls how "random" the model's word choices are. At each step of generation, the model calculates probabilities for the next token. Temperature adjusts these probabilities.
+
+- **temperature = 0**: Always picks the highest-probability token. Deterministic. Same input produces (nearly) the same output every time.
+- **temperature = 1.0**: Uses the raw probability distribution. More varied, creative, and unpredictable.
+- **temperature > 1.0**: Amplifies randomness. Outputs become increasingly chaotic.
+
+```typescript
+// Low temperature: Deterministic, consistent
+// Great for: classification, data extraction, factual Q&A
+async function extractData(text: string) {
+  return client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 256,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Extract the email address from this text: "${text}". Return only the email, nothing else.`,
+      },
+    ],
+  });
+}
+
+// Medium temperature: Balanced
+// Great for: general conversation, explanations, code generation
+async function explainConcept(concept: string) {
+  return client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 512,
+    temperature: 0.5,
+    messages: [
+      {
+        role: "user",
+        content: `Explain ${concept} to a junior developer.`,
+      },
+    ],
+  });
+}
+
+// High temperature: Creative, varied
+// Great for: brainstorming, creative writing, generating alternatives
+async function brainstorm(topic: string) {
+  return client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 512,
+    temperature: 1.0,
+    messages: [
+      {
+        role: "user",
+        content: `Generate 5 creative product name ideas for: ${topic}`,
+      },
+    ],
+  });
+}
+```
+
+To see the effect in practice:
+
+```typescript
+async function demonstrateTemperature() {
+  const prompt = "Complete this sentence: The future of AI is";
+
+  for (const temp of [0, 0.3, 0.7, 1.0]) {
+    console.log(`\n--- Temperature: ${temp} ---`);
+
+    // Run the same prompt 3 times to see consistency
+    for (let i = 0; i < 3; i++) {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 50,
+        temperature: temp,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const text =
+        response.content[0].type === "text" ? response.content[0].text : "";
+      console.log(`  Run ${i + 1}: ${text.slice(0, 80)}...`);
+    }
+  }
+}
+```
+
+At temperature 0, all three runs will be nearly identical. At temperature 1.0, each run will be noticeably different.
+
+### max_tokens: Response Length Control
+
+`max_tokens` sets the maximum number of tokens the model will generate. It is a hard ceiling -- the model stops generating once it hits this limit, even mid-sentence.
+
+```typescript
+// Too few tokens: Response gets cut off
+const truncated = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 10, // Only 10 tokens!
+  messages: [
+    { role: "user", content: "Explain quantum computing in detail." },
+  ],
+});
+// stop_reason will be "max_tokens" - the response was cut off
+
+// Right-sized: Enough room for a complete response
+const complete = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 512,
+  messages: [
+    {
+      role: "user",
+      content: "Explain quantum computing in 2-3 sentences.",
+    },
+  ],
+});
+// stop_reason will be "end_turn" - the model finished naturally
+```
+
+Always check `stop_reason`:
+
+```typescript
+function handleResponse(response: Anthropic.Message): string {
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  if (response.stop_reason === "max_tokens") {
+    console.warn(
+      "Warning: Response was truncated. Consider increasing max_tokens."
+    );
+    // You might want to retry with more tokens
+    // or append "..." to indicate truncation
+  }
+
+  return text;
+}
+```
+
+**Guidelines for setting max_tokens:**
+
+| Task | Recommended max_tokens |
+|------|----------------------|
+| Classification (single word) | 10-20 |
+| Short answer | 100-256 |
+| Paragraph response | 256-512 |
+| Detailed explanation | 512-1024 |
+| Long-form content | 1024-4096 |
+| Code generation | 2048-4096 |
+
+### stop_sequences: Custom Stop Points
+
+Stop sequences tell the model to stop generating when it produces a specific string. This is powerful for controlling output format:
+
+```typescript
+// Stop at a specific delimiter
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  stop_sequences: ["---END---"],
+  messages: [
+    {
+      role: "user",
+      content: `Generate a product description. End your response with ---END---
+
+Product: Wireless Bluetooth Headphones`,
+    },
+  ],
+});
+
+// The response will stop RIGHT BEFORE "---END---"
+// stop_reason will be "stop_sequence"
+```
+
+Practical use cases:
+
+```typescript
+// Extract just the first item from a list
+const firstItem = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 256,
+  stop_sequences: ["\n2."], // Stop before the second item
+  messages: [
+    {
+      role: "user",
+      content: "List 5 benefits of TypeScript:\n1.",
+    },
+  ],
+});
+
+// Stop at the end of a code block
+const codeOnly = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  stop_sequences: ["```\n"], // Stop at the closing code fence
+  messages: [
+    {
+      role: "user",
+      content: "Write a TypeScript function to reverse a string. Put it in a code block.",
+    },
+  ],
+});
+
+// Use multiple stop sequences
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 256,
+  stop_sequences: ["Human:", "User:", "Question:"],
+  messages: [
+    {
+      role: "user",
+      content: "Answer the following question briefly.\nQuestion: What is TypeScript?",
+    },
+  ],
+});
+```
+
+### top_p (Nucleus Sampling)
+
+`top_p` is an alternative to temperature for controlling randomness. It works differently: instead of scaling probabilities, it considers only the smallest set of tokens whose cumulative probability exceeds `p`.
+
+```typescript
+// top_p = 0.1: Only consider the top 10% most likely tokens
+// Very focused, conservative output
+
+// top_p = 0.9: Consider the top 90% most likely tokens
+// More diverse output, but still avoids the long tail of unlikely tokens
+
+// top_p = 1.0: Consider all tokens (same as no filtering)
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 256,
+  top_p: 0.9,
+  messages: [{ role: "user", content: "Suggest a creative name for a cafe." }],
+});
+```
+
+**Important**: In practice, you should adjust either `temperature` OR `top_p`, not both simultaneously. They both control randomness and using both can lead to unpredictable interactions.
+
+### Choosing Parameters for Common Tasks
+
+```typescript
+interface TaskConfig {
+  temperature: number;
+  max_tokens: number;
+  stop_sequences?: string[];
+}
+
+const TASK_CONFIGS: Record<string, TaskConfig> = {
+  // Deterministic tasks: low temperature, minimal tokens
+  classification: {
+    temperature: 0,
+    max_tokens: 20,
+  },
+  dataExtraction: {
+    temperature: 0,
+    max_tokens: 512,
+  },
+  codeGeneration: {
+    temperature: 0.2,
+    max_tokens: 2048,
+    stop_sequences: ["```\n\n"],
+  },
+
+  // Balanced tasks: moderate temperature
+  explanation: {
+    temperature: 0.5,
+    max_tokens: 1024,
+  },
+  conversation: {
+    temperature: 0.7,
+    max_tokens: 512,
+  },
+
+  // Creative tasks: higher temperature
+  brainstorming: {
+    temperature: 1.0,
+    max_tokens: 1024,
+  },
+  creativeWriting: {
+    temperature: 0.9,
+    max_tokens: 2048,
+  },
+};
+
+async function callWithConfig(taskType: string, prompt: string) {
+  const config = TASK_CONFIGS[taskType];
+  if (!config) throw new Error(`Unknown task type: ${taskType}`);
+
+  return client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    ...config,
+    messages: [{ role: "user", content: prompt }],
+  });
+}
+```
+
+## Common Mistakes
+
+1. **Using temperature 1.0 for factual tasks**: High temperature means the model is more likely to "hallucinate" or give inconsistent answers. For anything requiring accuracy, use temperature 0 or close to 0.
+
+2. **Setting max_tokens too high "just in case"**: While this does not directly increase cost (you only pay for tokens actually generated), it removes a safety net. If a prompt goes wrong and the model starts rambling, a reasonable max_tokens limit prevents a huge bill.
+
+3. **Adjusting both temperature and top_p**: Pick one. If you are new to this, stick with temperature and leave top_p at the default.
+
+4. **Not checking stop_reason**: If your response was truncated (`stop_reason: "max_tokens"`), you are working with incomplete data. Always check and handle this.
+
+5. **Using stop_sequences that appear in normal output**: If you set `"."` as a stop sequence, the model will stop at the first period. Be specific with your stop sequences to avoid premature termination.
+
+## Your Task
+
+Build a parameter experimentation tool that:
+
+1. Takes a single prompt and runs it with different parameter combinations
+2. Tests at least 3 different temperature values (0, 0.5, 1.0)
+3. Tests at least 2 different max_tokens values to show truncation vs complete responses
+4. Demonstrates stop_sequences by extracting just the first item from a list
+5. Runs each configuration 3 times to show consistency (or lack thereof) at different temperatures
+6. Prints a comparison table showing the results
+
+Create a `TaskConfig` object with recommended parameters for these three use cases:
+- Email classification (into categories: urgent, normal, spam)
+- Blog post generation
+- JSON data extraction
+
+Test each config and verify it produces appropriate output for its intended task.

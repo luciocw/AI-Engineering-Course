@@ -1,0 +1,244 @@
+---
+title: "Returning Rich Tool Results"
+description: "Learn best practices for returning structured data from tools including tables, lists, formatted text, and managing result size."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 9
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["tools", "function-calling", "structured-data", "formatting", "best-practices"]
+---
+
+## What You'll Learn
+
+- How to structure tool results for maximum LLM comprehension
+- Formatting patterns: tables, lists, key-value pairs, and summaries
+- Managing result size to stay within context limits
+- Best practices for tool result content
+
+## Key Concepts
+
+### The Goal: LLM-Friendly Results
+
+Your tool result is consumed by the LLM, not a human. The LLM then translates it into a natural response. This means your result should be:
+
+1. **Structured** -- easy for the LLM to parse
+2. **Concise** -- no unnecessary data
+3. **Self-describing** -- includes labels and context
+4. **Bounded** -- not too large
+
+### Format 1: Key-Value Pairs
+
+Best for single-entity lookups:
+
+```typescript
+function formatUserProfile(user: User): string {
+  return [
+    `Name: ${user.name}`,
+    `Email: ${user.email}`,
+    `Role: ${user.role}`,
+    `Department: ${user.department}`,
+    `Joined: ${user.joinDate}`,
+    `Active: ${user.isActive ? "Yes" : "No"}`,
+  ].join("\n");
+}
+```
+
+### Format 2: Markdown Tables
+
+Best for comparing multiple items:
+
+```typescript
+function formatProductTable(products: Product[]): string {
+  const header = "| Name | Price | Category | In Stock |";
+  const separator = "|------|-------|----------|----------|";
+  const rows = products.map(
+    (p) =>
+      `| ${p.name} | $${p.price.toFixed(2)} | ${p.category} | ${p.inStock ? "Yes" : "No"} |`
+  );
+
+  return [header, separator, ...rows].join("\n");
+}
+
+// Output:
+// | Name    | Price  | Category    | In Stock |
+// |---------|--------|-------------|----------|
+// | Widget  | $9.99  | Hardware    | Yes      |
+// | Gadget  | $24.99 | Electronics | No       |
+```
+
+### Format 3: Numbered Lists
+
+Best for search results or ranked items:
+
+```typescript
+function formatSearchResults(results: SearchResult[]): string {
+  if (results.length === 0) {
+    return "No results found.";
+  }
+
+  const formatted = results.map(
+    (r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   URL: ${r.url}`
+  );
+
+  return `Found ${results.length} results:\n\n${formatted.join("\n\n")}`;
+}
+```
+
+### Format 4: Hierarchical Data
+
+Best for nested structures like file trees or org charts:
+
+```typescript
+function formatFileTree(
+  node: FileNode,
+  indent: string = "",
+  isLast: boolean = true
+): string {
+  const prefix = indent + (isLast ? "└── " : "├── ");
+  const childIndent = indent + (isLast ? "    " : "│   ");
+
+  let result = `${prefix}${node.name}`;
+  if (node.size) result += ` (${formatSize(node.size)})`;
+  result += "\n";
+
+  if (node.children) {
+    node.children.forEach((child, i) => {
+      result += formatFileTree(
+        child,
+        childIndent,
+        i === node.children!.length - 1
+      );
+    });
+  }
+
+  return result;
+}
+
+// Output:
+// └── src
+//     ├── index.ts (2.1 KB)
+//     ├── utils
+//     │   ├── helpers.ts (1.5 KB)
+//     │   └── format.ts (0.8 KB)
+//     └── types.ts (0.3 KB)
+```
+
+### Format 5: Summary + Details
+
+Best for large datasets -- provide a summary first, then details:
+
+```typescript
+function formatAnalyticsReport(data: AnalyticsData): string {
+  const summary = [
+    "## Summary",
+    `Period: ${data.startDate} to ${data.endDate}`,
+    `Total visitors: ${data.totalVisitors.toLocaleString()}`,
+    `Unique visitors: ${data.uniqueVisitors.toLocaleString()}`,
+    `Bounce rate: ${(data.bounceRate * 100).toFixed(1)}%`,
+    `Avg session: ${data.avgSessionMinutes.toFixed(1)} minutes`,
+    "",
+  ].join("\n");
+
+  const topPages = [
+    "## Top Pages",
+    ...data.topPages.slice(0, 5).map(
+      (p, i) => `${i + 1}. ${p.path} - ${p.views.toLocaleString()} views`
+    ),
+    "",
+  ].join("\n");
+
+  const sources = [
+    "## Traffic Sources",
+    ...data.sources.map(
+      (s) => `- ${s.name}: ${(s.percentage * 100).toFixed(1)}%`
+    ),
+  ].join("\n");
+
+  return [summary, topPages, sources].join("\n");
+}
+```
+
+### Managing Result Size
+
+Large tool results waste tokens and can confuse the LLM. Always bound your output:
+
+```typescript
+function formatToolResult(data: any[], options: {
+  maxItems?: number;
+  maxFieldLength?: number;
+  includeCount?: boolean;
+} = {}): string {
+  const { maxItems = 10, maxFieldLength = 200, includeCount = true } = options;
+
+  const total = data.length;
+  const truncated = data.slice(0, maxItems);
+
+  // Truncate long text fields
+  const processed = truncated.map((item) => {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(item)) {
+      if (typeof value === "string" && value.length > maxFieldLength) {
+        result[key] = value.substring(0, maxFieldLength) + "...";
+      } else {
+        result[key] = value;
+      }
+    }
+    return result;
+  });
+
+  let output = JSON.stringify(processed, null, 2);
+
+  if (includeCount && total > maxItems) {
+    output += `\n\n(Showing ${maxItems} of ${total} total results)`;
+  }
+
+  return output;
+}
+```
+
+### Content Block Arrays
+
+The Anthropic API also supports returning tool results as an array of content blocks, which is useful for mixed content:
+
+```typescript
+// Return structured content blocks
+const toolResult: Anthropic.ToolResultBlockParam = {
+  type: "tool_result",
+  tool_use_id: toolCall.id,
+  content: [
+    {
+      type: "text",
+      text: "Here are the results from the database query:",
+    },
+    {
+      type: "text",
+      text: formatProductTable(products),
+    },
+  ],
+};
+```
+
+## Common Mistakes
+
+1. **Returning raw JSON for everything** -- Raw JSON works but is harder for the LLM to parse than formatted text. Use structured formats (tables, lists, key-value pairs) when possible.
+
+2. **No result size limits** -- A database query returning 10,000 rows will blow up your context window. Always paginate or truncate.
+
+3. **Missing context in results** -- Don't return just data. Include metadata like "Showing 10 of 243 results" or "Data as of 2024-01-15" so the LLM can communicate this to the user.
+
+4. **Inconsistent formatting** -- If one tool returns markdown and another returns plain text, the LLM has to adapt to different formats. Pick a consistent style across all your tools.
+
+5. **Including binary or encoded data** -- Never return base64 images, binary data, or encoded content in tool results. The LLM cannot process these. Convert to text descriptions.
+
+## Your Task
+
+Build a `dashboard_summary` tool that aggregates data from a mock database. It should accept a `metric` parameter (one of "sales", "users", "performance") and return a rich, formatted result that includes:
+
+1. A summary section with key numbers
+2. A markdown table with the top 5 items
+3. A trend indicator (up/down/flat) with percentage
+4. A note about the data freshness
+
+Format the result using the Summary + Details pattern. Include size limits so results never exceed 1000 characters. Test with all three metric types.

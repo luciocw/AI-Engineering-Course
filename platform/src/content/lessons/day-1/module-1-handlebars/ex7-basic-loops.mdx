@@ -1,0 +1,190 @@
+---
+title: "Basic Loops"
+description: "Iterating over arrays with each, using built-in loop variables, and handling empty arrays."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 7
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "each", "loops", "arrays", "iteration"]
+---
+
+## What You'll Learn
+
+You will learn how to iterate over arrays using `{{#each}}`, access built-in loop variables like `@index`, `@first`, and `@last`, and handle the case of empty arrays with `{{else}}`.
+
+## Key Concepts
+
+### The `{{#each}}` Block
+
+The `{{#each}}` block iterates over an array and renders its content once for each item. Inside the block, `this` refers to the current array element:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(`
+{{#each fruits}}
+- {{this}}
+{{/each}}
+`);
+
+const result = template({ fruits: ["Apple", "Banana", "Cherry"] });
+// "- Apple\n- Banana\n- Cherry"
+```
+
+When the array contains simple values (strings, numbers), `this` gives you the value directly. When the array contains objects, you can access their properties by name:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each users}}
+- {{this.name}} ({{this.email}})
+{{/each}}
+`);
+
+const result = template({
+  users: [
+    { name: "Alice", email: "alice@example.com" },
+    { name: "Bob", email: "bob@example.com" },
+  ],
+});
+// "- Alice (alice@example.com)\n- Bob (bob@example.com)"
+```
+
+Inside an `{{#each}}` block, the context changes to the current item. So you can also write `{{name}}` instead of `{{this.name}}`:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each users}}
+- {{name}} ({{email}})
+{{/each}}
+`);
+```
+
+Both forms work. Using `this.name` is more explicit; using `name` alone is shorter.
+
+### Built-In Loop Variables
+
+Handlebars provides several special variables inside `{{#each}}` blocks:
+
+**`@index`** -- The zero-based index of the current item:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each items}}
+{{@index}}. {{this}}
+{{/each}}
+`);
+
+const result = template({ items: ["First", "Second", "Third"] });
+// "0. First\n1. Second\n2. Third"
+```
+
+**`@first`** -- `true` for the first item only:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each items}}
+{{#if @first}}(START) {{/if}}{{this}}
+{{/each}}
+`);
+
+const result = template({ items: ["A", "B", "C"] });
+// "(START) A\nB\nC"
+```
+
+**`@last`** -- `true` for the last item only:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each items}}
+{{this}}{{#unless @last}}, {{/unless}}
+{{/each}}
+`);
+
+const result = template({ items: ["A", "B", "C"] });
+// "A, B, C"
+```
+
+This last pattern is particularly useful for building comma-separated lists without a trailing comma.
+
+### Handling Empty Arrays with `{{else}}`
+
+The `{{#each}}` block supports `{{else}}` for the case when the array is empty or the value is falsy:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each results}}
+- {{this.title}}
+{{else}}
+No results found.
+{{/each}}
+`);
+
+console.log(template({ results: [] }));
+// "No results found."
+
+console.log(template({ results: [{ title: "First Match" }] }));
+// "- First Match"
+```
+
+This is cleaner than wrapping the `{{#each}}` in a separate `{{#if}}` block.
+
+### Arrays in AI Engineering
+
+When building prompts for AI, you frequently need to include lists of items -- few-shot examples, context documents, conversation history, or enumerated options:
+
+```typescript
+const template = Handlebars.compile(`
+You are a helpful assistant. Here are some example interactions:
+
+{{#each examples}}
+User: {{this.input}}
+Assistant: {{this.output}}
+
+{{/each}}
+Now respond to the following:
+User: {{userQuery}}
+Assistant:
+`);
+
+const prompt = template({
+  examples: [
+    { input: "What is 2+2?", output: "2+2 equals 4." },
+    { input: "What color is the sky?", output: "The sky is blue." },
+  ],
+  userQuery: "What is the capital of France?",
+});
+```
+
+This is the **few-shot prompting** pattern. You pass an array of examples to a template, and `{{#each}}` renders them all. Adding or removing examples is as simple as changing the array.
+
+### Numbered Lists with `@index`
+
+Since `@index` is zero-based, you can create one-based numbered lists by using a helper (you will learn these later) or by adjusting in code:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each steps}}
+Step {{@index}}: {{this}}
+{{/each}}
+`);
+
+const result = template({
+  steps: ["Install dependencies", "Configure API key", "Run the server"],
+});
+// "Step 0: Install dependencies\nStep 1: Configure API key\nStep 2: Run the server"
+```
+
+For now the numbering starts at 0. In Exercise 11 you will learn how to create a helper that adds 1 to the index.
+
+## Common Mistakes
+
+- **Forgetting that `this` changes context inside `{{#each}}`.** Inside the loop, `this` refers to the current array element, not the root context. If you need to access a variable from outside the loop, you will need `../` (covered in Exercise 9).
+- **Leaving a trailing comma or separator.** Without using `@last`, it is easy to get an extra comma after the last item. Use `{{#unless @last}}, {{/unless}}` to add separators only between items.
+- **Not handling the empty array case.** If the array might be empty, always provide an `{{else}}` clause or wrap the section in `{{#if}}`. An empty `{{#each}}` produces no output, which may confuse users.
+- **Confusing `@index` starting value.** `@index` starts at 0, not 1. If you need a 1-based index, you will need a helper to add 1.
+
+## Your Task
+
+Create a template that iterates over an array of objects, displaying each item with its index. Use `@first` and `@last` to add special formatting to the first and last items. Include an `{{else}}` clause that handles the empty array case.

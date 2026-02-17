@@ -1,0 +1,477 @@
+---
+title: "Prompt Versioning: Managing Prompt Lifecycle"
+description: "Learn version control for prompts, A/B comparison between versions, regression testing, and prompt lifecycle management."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 19
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "versioning", "prompt-management", "regression-testing", "lifecycle", "deployment"]
+---
+
+## What You'll Learn
+
+- How to apply software engineering versioning practices to prompts
+- Running side-by-side comparisons between prompt versions
+- Building regression test suites for prompts
+- Managing the full lifecycle of a prompt from development to production
+- When and how to safely deploy prompt changes
+
+## Key Concepts
+
+### Prompts Are Code
+
+In AI engineering, prompts are not casual text -- they are critical business logic. A change to a single word can alter the behavior of your entire system. This means prompts deserve the same rigor as source code:
+
+- Version tracking with change history
+- Regression tests before deployment
+- Rollback capability when things go wrong
+- Review process before changes go live
+
+### Semantic Versioning for Prompts
+
+Apply semantic versioning to prompts, just like software:
+
+```typescript
+// MAJOR.MINOR.PATCH
+// MAJOR: Changes that alter output format or categories (breaking changes)
+// MINOR: Improvements that should produce better results (backward compatible)
+// PATCH: Typo fixes, clarification tweaks (no behavioral change)
+
+interface PromptVersionEntry {
+  version: string; // "2.1.0"
+  template: string;
+  config: {
+    model: string;
+    temperature: number;
+    maxTokens: number;
+  };
+  changelog: string;
+  author: string;
+  createdAt: Date;
+  status: "draft" | "testing" | "active" | "deprecated";
+}
+
+class VersionedPrompt {
+  private name: string;
+  private versions: Map<string, PromptVersionEntry> = new Map();
+  private activeVersion: string | null = null;
+  private versionHistory: string[] = []; // Ordered list of version strings
+
+  constructor(name: string) {
+    this.name = name;
+  }
+
+  addVersion(entry: PromptVersionEntry): void {
+    if (this.versions.has(entry.version)) {
+      throw new Error(`Version ${entry.version} already exists for "${this.name}"`);
+    }
+    this.versions.set(entry.version, entry);
+    this.versionHistory.push(entry.version);
+  }
+
+  promote(version: string): void {
+    const entry = this.versions.get(version);
+    if (!entry) throw new Error(`Version ${version} not found`);
+
+    // Deprecate current active version
+    if (this.activeVersion) {
+      const current = this.versions.get(this.activeVersion)!;
+      current.status = "deprecated";
+    }
+
+    entry.status = "active";
+    this.activeVersion = version;
+  }
+
+  rollback(): string | null {
+    if (!this.activeVersion) return null;
+
+    const currentIndex = this.versionHistory.indexOf(this.activeVersion);
+    if (currentIndex <= 0) return null;
+
+    const previousVersion = this.versionHistory[currentIndex - 1];
+    this.promote(previousVersion);
+    return previousVersion;
+  }
+
+  getActive(): PromptVersionEntry | null {
+    if (!this.activeVersion) return null;
+    return this.versions.get(this.activeVersion) ?? null;
+  }
+
+  getVersion(version: string): PromptVersionEntry | null {
+    return this.versions.get(version) ?? null;
+  }
+
+  getChangelog(): Array<{ version: string; changelog: string; date: Date }> {
+    return this.versionHistory.map((v) => {
+      const entry = this.versions.get(v)!;
+      return {
+        version: v,
+        changelog: entry.changelog,
+        date: entry.createdAt,
+      };
+    });
+  }
+}
+```
+
+### Building a Regression Test Suite
+
+Every prompt should have a test suite that verifies its behavior:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+interface PromptTestCase {
+  id: string;
+  input: string;
+  expectedBehavior: string; // Description of what "correct" looks like
+  mustContain?: string[]; // Strings that must appear in output
+  mustNotContain?: string[]; // Strings that must not appear
+  expectedCategory?: string; // For classification tasks
+  minLength?: number;
+  maxLength?: number;
+}
+
+interface TestResult {
+  testId: string;
+  passed: boolean;
+  output: string;
+  failures: string[];
+  latencyMs: number;
+}
+
+async function runPromptTests(
+  prompt: PromptVersionEntry,
+  testCases: PromptTestCase[]
+): Promise<{
+  results: TestResult[];
+  passRate: number;
+  failedTests: string[];
+}> {
+  const results: TestResult[] = [];
+
+  for (const test of testCases) {
+    const startTime = Date.now();
+
+    const response = await client.messages.create({
+      model: prompt.config.model,
+      max_tokens: prompt.config.maxTokens,
+      temperature: prompt.config.temperature,
+      messages: [
+        {
+          role: "user",
+          content: prompt.template.replace("{{input}}", test.input),
+        },
+      ],
+    });
+
+    const output =
+      response.content[0].type === "text" ? response.content[0].text : "";
+    const latencyMs = Date.now() - startTime;
+
+    // Run checks
+    const failures: string[] = [];
+
+    if (test.mustContain) {
+      for (const required of test.mustContain) {
+        if (!output.toLowerCase().includes(required.toLowerCase())) {
+          failures.push(`Missing required text: "${required}"`);
+        }
+      }
+    }
+
+    if (test.mustNotContain) {
+      for (const forbidden of test.mustNotContain) {
+        if (output.toLowerCase().includes(forbidden.toLowerCase())) {
+          failures.push(`Contains forbidden text: "${forbidden}"`);
+        }
+      }
+    }
+
+    if (test.expectedCategory) {
+      if (!output.toLowerCase().includes(test.expectedCategory.toLowerCase())) {
+        failures.push(
+          `Expected category "${test.expectedCategory}" not found in output`
+        );
+      }
+    }
+
+    if (test.minLength && output.length < test.minLength) {
+      failures.push(
+        `Output too short: ${output.length} < ${test.minLength} chars`
+      );
+    }
+
+    if (test.maxLength && output.length > test.maxLength) {
+      failures.push(
+        `Output too long: ${output.length} > ${test.maxLength} chars`
+      );
+    }
+
+    results.push({
+      testId: test.id,
+      passed: failures.length === 0,
+      output,
+      failures,
+      latencyMs,
+    });
+  }
+
+  const passed = results.filter((r) => r.passed).length;
+  const failedTests = results.filter((r) => !r.passed).map((r) => r.testId);
+
+  return {
+    results,
+    passRate: passed / results.length,
+    failedTests,
+  };
+}
+```
+
+### Side-by-Side Version Comparison
+
+Before promoting a new version, compare it against the current active version:
+
+```typescript
+interface ComparisonResult {
+  testId: string;
+  input: string;
+  versionA: { output: string; latencyMs: number };
+  versionB: { output: string; latencyMs: number };
+  winner: "A" | "B" | "tie";
+  reason: string;
+}
+
+async function compareVersions(
+  versionA: PromptVersionEntry,
+  versionB: PromptVersionEntry,
+  testCases: PromptTestCase[]
+): Promise<{
+  comparisons: ComparisonResult[];
+  summary: { aWins: number; bWins: number; ties: number };
+}> {
+  const comparisons: ComparisonResult[] = [];
+
+  for (const test of testCases) {
+    // Run both versions
+    const [resultA, resultB] = await Promise.all([
+      runSingleTest(versionA, test.input),
+      runSingleTest(versionB, test.input),
+    ]);
+
+    // Use LLM-as-judge to compare
+    const judgeResponse = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 200,
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: `Compare these two outputs for the prompt: "${test.input}"
+
+Expected behavior: ${test.expectedBehavior}
+
+Output A: ${resultA.output}
+
+Output B: ${resultB.output}
+
+Which is better? Respond as JSON: {"winner": "A" | "B" | "tie", "reason": "brief explanation"}`,
+        },
+      ],
+    });
+
+    const judgeText =
+      judgeResponse.content[0].type === "text"
+        ? judgeResponse.content[0].text
+        : "";
+    const judgment = JSON.parse(judgeText.match(/\{[\s\S]*\}/)![0]);
+
+    comparisons.push({
+      testId: test.id,
+      input: test.input,
+      versionA: resultA,
+      versionB: resultB,
+      winner: judgment.winner,
+      reason: judgment.reason,
+    });
+  }
+
+  const summary = {
+    aWins: comparisons.filter((c) => c.winner === "A").length,
+    bWins: comparisons.filter((c) => c.winner === "B").length,
+    ties: comparisons.filter((c) => c.winner === "tie").length,
+  };
+
+  return { comparisons, summary };
+}
+
+async function runSingleTest(
+  prompt: PromptVersionEntry,
+  input: string
+): Promise<{ output: string; latencyMs: number }> {
+  const startTime = Date.now();
+
+  const response = await client.messages.create({
+    model: prompt.config.model,
+    max_tokens: prompt.config.maxTokens,
+    temperature: prompt.config.temperature,
+    messages: [
+      {
+        role: "user",
+        content: prompt.template.replace("{{input}}", input),
+      },
+    ],
+  });
+
+  return {
+    output:
+      response.content[0].type === "text" ? response.content[0].text : "",
+    latencyMs: Date.now() - startTime,
+  };
+}
+```
+
+### The Deployment Pipeline
+
+A safe deployment process for prompt changes:
+
+```typescript
+class PromptDeploymentPipeline {
+  private prompt: VersionedPrompt;
+  private testSuite: PromptTestCase[];
+  private minPassRate: number;
+
+  constructor(config: {
+    prompt: VersionedPrompt;
+    testSuite: PromptTestCase[];
+    minPassRate?: number;
+  }) {
+    this.prompt = config.prompt;
+    this.testSuite = config.testSuite;
+    this.minPassRate = config.minPassRate ?? 0.9;
+  }
+
+  async deploy(version: string): Promise<{
+    success: boolean;
+    reason: string;
+    details: Record<string, unknown>;
+  }> {
+    const entry = this.prompt.getVersion(version);
+    if (!entry) {
+      return { success: false, reason: "Version not found", details: {} };
+    }
+
+    console.log(`Starting deployment pipeline for ${version}...`);
+
+    // Step 1: Run regression tests
+    console.log("Step 1: Running regression tests...");
+    const testResults = await runPromptTests(entry, this.testSuite);
+
+    if (testResults.passRate < this.minPassRate) {
+      return {
+        success: false,
+        reason: `Regression tests failed: ${(testResults.passRate * 100).toFixed(1)}% pass rate (minimum: ${(this.minPassRate * 100).toFixed(1)}%)`,
+        details: { failedTests: testResults.failedTests },
+      };
+    }
+
+    console.log(`  Pass rate: ${(testResults.passRate * 100).toFixed(1)}%`);
+
+    // Step 2: Compare against current active version
+    const current = this.prompt.getActive();
+    if (current) {
+      console.log("Step 2: Comparing against current version...");
+      const comparison = await compareVersions(current, entry, this.testSuite);
+
+      console.log(
+        `  Current wins: ${comparison.summary.aWins}, New wins: ${comparison.summary.bWins}, Ties: ${comparison.summary.ties}`
+      );
+
+      // New version should win at least as often as it loses
+      if (comparison.summary.bWins < comparison.summary.aWins) {
+        return {
+          success: false,
+          reason: `New version underperforms current: ${comparison.summary.bWins} wins vs ${comparison.summary.aWins} losses`,
+          details: { comparison: comparison.summary },
+        };
+      }
+    }
+
+    // Step 3: Promote
+    console.log("Step 3: Promoting to active...");
+    this.prompt.promote(version);
+
+    return {
+      success: true,
+      reason: "Deployed successfully",
+      details: {
+        passRate: testResults.passRate,
+        version,
+      },
+    };
+  }
+}
+```
+
+### Managing Prompt Lifecycle
+
+```
+Draft → Testing → Active → Deprecated
+  ↓        ↓        ↓
+  └─ Discard  └─ Fail  └─ Rollback
+```
+
+```typescript
+function printPromptLifecycle(prompt: VersionedPrompt): void {
+  const changelog = prompt.getChangelog();
+  const active = prompt.getActive();
+
+  console.log("=== Prompt Lifecycle ===\n");
+
+  for (const entry of changelog) {
+    const isActive = active && entry.version === active.version;
+    const marker = isActive ? " [ACTIVE]" : "";
+    console.log(`v${entry.version}${marker} (${entry.date.toISOString().split("T")[0]})`);
+    console.log(`  ${entry.changelog}`);
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Deploying without regression tests**: Even small prompt changes can cause unexpected regressions. Always run your test suite before deploying a new version.
+
+2. **No rollback plan**: If the new version causes issues in production, you need to revert instantly. Keep the previous version available and have a one-click rollback process.
+
+3. **Testing only the happy path**: Your test suite should include edge cases, adversarial inputs, and the specific scenarios that motivated the prompt change.
+
+4. **Changing the prompt and the model simultaneously**: When you change two things at once, you cannot tell which one caused any difference. Change one variable at a time.
+
+5. **Not documenting why changes were made**: Six months from now, you will not remember why version 2.3.0 changed "analyze" to "evaluate." Write meaningful changelogs with every version.
+
+## Your Task
+
+Build a prompt versioning and deployment system that:
+
+1. Implements a `VersionedPrompt` class with version history and status tracking
+2. Creates at least 3 versions of a prompt (v1.0.0, v1.1.0, v2.0.0)
+3. Builds a regression test suite with at least 6 test cases including edge cases
+4. Implements a side-by-side comparison function using LLM-as-judge
+5. Builds a deployment pipeline that runs tests and comparisons before promoting
+6. Demonstrates rollback functionality
+
+Walk through this scenario:
+- Deploy v1.0.0 (passes all tests)
+- Create v1.1.0 with an improvement
+- Run the deployment pipeline for v1.1.0 (should pass and promote)
+- Create v2.0.0 with a change that causes a regression
+- Run the deployment pipeline for v2.0.0 (should fail due to regression)
+- Show that v1.1.0 is still active
+
+Bonus: Add a `diff` function that shows the textual differences between two versions of a prompt.

@@ -1,0 +1,180 @@
+---
+title: "Nested Conditionals"
+description: "Nesting if blocks, understanding limitations of Handlebars logic, and workaround patterns for complex conditions."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 6
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "conditionals", "nested-if", "logic-patterns"]
+---
+
+## What You'll Learn
+
+You will learn how to nest `{{#if}}` blocks inside each other, understand why Handlebars intentionally lacks logical operators like `&&` and `||`, and discover practical workaround patterns for expressing complex conditions.
+
+## Key Concepts
+
+### Nesting `{{#if}}` Blocks
+
+You can place one `{{#if}}` block inside another to create multi-level decision trees:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(`
+{{#if isAuthenticated}}
+  {{#if isAdmin}}
+    Welcome, Administrator. You have full access.
+  {{else}}
+    Welcome, {{name}}. You have standard access.
+  {{/if}}
+{{else}}
+  Please log in to continue.
+{{/if}}
+`);
+
+console.log(template({ isAuthenticated: true, isAdmin: true }));
+// "Welcome, Administrator. You have full access."
+
+console.log(template({ isAuthenticated: true, isAdmin: false, name: "Alice" }));
+// "Welcome, Alice. You have standard access."
+
+console.log(template({ isAuthenticated: false }));
+// "Please log in to continue."
+```
+
+The inner `{{#if isAdmin}}` only runs when the outer `{{#if isAuthenticated}}` is truthy. This creates a clear decision tree: first check authentication, then check role.
+
+### Why No `&&` or `||` Operators?
+
+Handlebars is intentionally "logic-less." The design philosophy is that templates should contain minimal logic. Complex business rules belong in your JavaScript code, not in your templates.
+
+These all produce syntax errors:
+
+```typescript
+// NONE of these work in Handlebars:
+// {{#if isAdmin && isActive}}
+// {{#if isAdmin || isModerator}}
+// {{#if age >= 18}}
+// {{#if !isBlocked}}
+```
+
+This might feel limiting, but it enforces a clean separation: compute your conditions in code, then pass simple boolean flags to the template.
+
+### Workaround Pattern 1: Compute Flags Before Rendering
+
+The cleanest approach is to compute any complex conditions before passing data to the template:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if canAccessDashboard}}
+  Dashboard content here...
+{{else}}
+  You do not have access.
+{{/if}}
+`);
+
+// Compute the complex condition in JavaScript
+const user = {
+  isAdmin: true,
+  isActive: true,
+  hasSubscription: false,
+};
+
+const canAccessDashboard =
+  user.isActive && (user.isAdmin || user.hasSubscription);
+
+const result = template({ canAccessDashboard });
+```
+
+This keeps the template simple and moves the logic to where it can be tested and debugged easily.
+
+### Workaround Pattern 2: Nesting as AND
+
+Nesting two `{{#if}}` blocks is equivalent to a logical AND -- both conditions must be true:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if isActive}}
+  {{#if hasPermission}}
+    You can perform this action.
+  {{/if}}
+{{/if}}
+`);
+
+// This block only renders when BOTH isActive AND hasPermission are truthy
+```
+
+This is a common pattern. When you need "condition A AND condition B," nest the second `{{#if}}` inside the first.
+
+### Workaround Pattern 3: Helpers for OR Logic
+
+For OR logic, you will eventually use custom helpers (covered in Exercise 13). Here is a preview of what that looks like:
+
+```typescript
+Handlebars.registerHelper("or", function (a: any, b: any) {
+  return a || b;
+});
+
+const template = Handlebars.compile(`
+{{#if (or isAdmin isModerator)}}
+  You have elevated privileges.
+{{/if}}
+`);
+```
+
+For now, you can use the pre-computation pattern instead.
+
+### Practical Example: Adaptive AI Prompt
+
+Here is a realistic nested conditional pattern for building adaptive prompts:
+
+```typescript
+const promptTemplate = Handlebars.compile(`
+You are a customer service assistant.
+
+{{#if isPremiumCustomer}}
+  This is a premium customer. Prioritize their request.
+  {{#if hasOpenTickets}}
+    They have {{ticketCount}} open support tickets. Reference them if relevant.
+  {{/if}}
+{{else}}
+  This is a standard customer.
+  {{#if isTrialUser}}
+    They are on a free trial. Mention upgrade options if appropriate.
+  {{/if}}
+{{/if}}
+
+{{#if previousInteractions}}
+  They have interacted with support before. Maintain continuity.
+{{/if}}
+
+Customer message: {{message}}
+`);
+```
+
+This template adapts the prompt based on customer type, ticket status, and interaction history. Each layer of nesting handles a different dimension of the decision.
+
+### When to Use Helpers Instead
+
+As a rule of thumb:
+
+- **One or two levels of nesting**: Fine in a template.
+- **Three or more levels**: Consider moving logic to JavaScript and passing computed flags.
+- **Any comparison (`===`, `>`, `<`)**: Use a helper or compute the result before rendering.
+- **Complex boolean expressions**: Always compute in JavaScript.
+
+Deep nesting makes templates hard to read and debug. If you find yourself nesting three or more `{{#if}}` blocks, refactor.
+
+## Common Mistakes
+
+- **Trying to use `&&`, `||`, or `!` in `{{#if}}` expressions.** These are syntax errors. Handlebars conditionals only accept a single value to test for truthiness.
+- **Deeply nesting conditionals until the template is unreadable.** More than two levels of nesting is a sign that logic should move to your JavaScript code.
+- **Forgetting to close every `{{#if}}` block.** Each `{{#if}}` needs a matching `{{/if}}`. In nested structures it is easy to miss one. Indent your templates consistently to make the structure visible.
+- **Assuming `{{else if}}` chains work like JavaScript.** Handlebars does support `{{else if condition}}` syntax for chained conditions, but be aware that each condition is still a simple truthiness check -- no comparisons allowed.
+
+## Your Task
+
+Build a template with at least two levels of nested conditionals that produces different output for different combinations of flags. Then refactor one of the conditions using the "compute flags before rendering" pattern to demonstrate the difference in template complexity.

@@ -1,0 +1,354 @@
+---
+title: "Dynamic Tool Schemas"
+description: "Generate tool schemas at runtime from databases, config files, or API specs. Build dynamic tool registration that adapts to changing requirements."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 18
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "dynamic-schemas", "runtime", "database-driven", "advanced"]
+---
+
+## What You'll Learn
+
+- Generating tool definitions at runtime instead of hardcoding them
+- Building tools from database table schemas
+- Dynamic tool registration and deregistration
+- Handling schema changes without redeploying code
+
+## Key Concepts
+
+### Why Dynamic Schemas?
+
+Static tool definitions work for simple apps. But in real applications, the available tools and their schemas might change based on:
+
+- User permissions (admin vs. regular user)
+- Database tables that change over time
+- Feature flags
+- External API capabilities discovered at runtime
+- Multi-tenant systems where each tenant has different tools
+
+### Generating Tools from a Config Object
+
+Instead of hardcoding tool definitions, generate them from configuration:
+
+```typescript
+interface ToolSpec {
+  name: string;
+  description: string;
+  parameters: {
+    name: string;
+    type: "string" | "number" | "boolean" | "array";
+    description: string;
+    required: boolean;
+    enum?: string[];
+    items?: { type: string };
+  }[];
+  handler: string; // Reference to the handler function
+}
+
+function buildToolDefinition(spec: ToolSpec): Anthropic.Tool {
+  const properties: Record<string, any> = {};
+  const required: string[] = [];
+
+  for (const param of spec.parameters) {
+    const prop: any = {
+      type: param.type,
+      description: param.description,
+    };
+
+    if (param.enum) prop.enum = param.enum;
+    if (param.items) prop.items = param.items;
+
+    properties[param.name] = prop;
+
+    if (param.required) {
+      required.push(param.name);
+    }
+  }
+
+  return {
+    name: spec.name,
+    description: spec.description,
+    input_schema: {
+      type: "object" as const,
+      properties,
+      required,
+    },
+  };
+}
+```
+
+### Database-Driven Tool Definitions
+
+Generate tools from your database schema dynamically:
+
+```typescript
+interface ColumnInfo {
+  name: string;
+  type: string;       // "TEXT", "INTEGER", "REAL", "BOOLEAN"
+  nullable: boolean;
+  description?: string;
+}
+
+interface TableInfo {
+  name: string;
+  columns: ColumnInfo[];
+  description?: string;
+}
+
+function sqlTypeToJsonType(sqlType: string): string {
+  const mapping: Record<string, string> = {
+    TEXT: "string",
+    VARCHAR: "string",
+    INTEGER: "number",
+    INT: "number",
+    REAL: "number",
+    FLOAT: "number",
+    BOOLEAN: "boolean",
+    BOOL: "boolean",
+  };
+  return mapping[sqlType.toUpperCase()] || "string";
+}
+
+function createQueryToolFromTable(table: TableInfo): Anthropic.Tool {
+  const filterProperties: Record<string, any> = {};
+
+  for (const col of table.columns) {
+    filterProperties[col.name] = {
+      type: sqlTypeToJsonType(col.type),
+      description: col.description || `Filter by ${col.name}`,
+    };
+  }
+
+  return {
+    name: `query_${table.name}`,
+    description:
+      `Query the ${table.name} table. ${table.description || ""} ` +
+      `Available columns: ${table.columns.map((c) => c.name).join(", ")}. ` +
+      `All filter parameters are optional. Returns matching rows.`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        filters: {
+          type: "object",
+          description: "Key-value pairs to filter results",
+          properties: filterProperties,
+        },
+        sort_by: {
+          type: "string",
+          enum: table.columns.map((c) => c.name),
+          description: "Column to sort by",
+        },
+        sort_order: {
+          type: "string",
+          enum: ["asc", "desc"],
+          description: "Sort direction (default: asc)",
+        },
+        limit: {
+          type: "number",
+          description: "Max rows to return (default: 10, max: 100)",
+        },
+      },
+      required: [],
+    },
+  };
+}
+
+// Generate tools from your database schema
+function generateToolsFromSchema(tables: TableInfo[]): Anthropic.Tool[] {
+  return tables.map(createQueryToolFromTable);
+}
+```
+
+### Example: Building Tools from a Database Schema
+
+```typescript
+// Simulate reading table schema from a database
+const databaseSchema: TableInfo[] = [
+  {
+    name: "customers",
+    description: "Customer accounts and profiles",
+    columns: [
+      { name: "id", type: "INTEGER", nullable: false, description: "Unique customer ID" },
+      { name: "name", type: "TEXT", nullable: false, description: "Full name" },
+      { name: "email", type: "TEXT", nullable: false, description: "Email address" },
+      { name: "plan", type: "TEXT", nullable: false, description: "Subscription plan: free, pro, enterprise" },
+      { name: "created_at", type: "TEXT", nullable: false, description: "Account creation date (ISO 8601)" },
+    ],
+  },
+  {
+    name: "orders",
+    description: "Customer orders and purchases",
+    columns: [
+      { name: "id", type: "INTEGER", nullable: false, description: "Unique order ID" },
+      { name: "customer_id", type: "INTEGER", nullable: false, description: "ID of the customer who placed the order" },
+      { name: "total", type: "REAL", nullable: false, description: "Order total in USD" },
+      { name: "status", type: "TEXT", nullable: false, description: "Order status: pending, shipped, delivered, cancelled" },
+      { name: "created_at", type: "TEXT", nullable: false, description: "Order date (ISO 8601)" },
+    ],
+  },
+];
+
+// Generate tools dynamically
+const tools = generateToolsFromSchema(databaseSchema);
+// Creates: query_customers and query_orders tools automatically
+```
+
+### Dynamic Tool Registration
+
+A registry that supports adding and removing tools at runtime:
+
+```typescript
+class DynamicToolRegistry {
+  private tools = new Map<
+    string,
+    {
+      definition: Anthropic.Tool;
+      handler: (input: Record<string, unknown>) => Promise<string>;
+      enabled: boolean;
+    }
+  >();
+
+  register(
+    name: string,
+    definition: Anthropic.Tool,
+    handler: (input: Record<string, unknown>) => Promise<string>
+  ): void {
+    this.tools.set(name, { definition, handler, enabled: true });
+    console.log(`Tool registered: ${name}`);
+  }
+
+  unregister(name: string): void {
+    this.tools.delete(name);
+    console.log(`Tool unregistered: ${name}`);
+  }
+
+  enable(name: string): void {
+    const tool = this.tools.get(name);
+    if (tool) tool.enabled = true;
+  }
+
+  disable(name: string): void {
+    const tool = this.tools.get(name);
+    if (tool) tool.enabled = false;
+  }
+
+  getActiveDefinitions(): Anthropic.Tool[] {
+    return Array.from(this.tools.values())
+      .filter((t) => t.enabled)
+      .map((t) => t.definition);
+  }
+
+  async execute(name: string, input: Record<string, unknown>): Promise<string> {
+    const tool = this.tools.get(name);
+    if (!tool) {
+      return JSON.stringify({ error: `Tool not found: ${name}` });
+    }
+    if (!tool.enabled) {
+      return JSON.stringify({ error: `Tool "${name}" is currently disabled` });
+    }
+    return tool.handler(input);
+  }
+
+  // Bulk register from database schema
+  registerFromSchema(tables: TableInfo[]): void {
+    for (const table of tables) {
+      const definition = createQueryToolFromTable(table);
+      const handler = createQueryHandler(table);
+      this.register(definition.name, definition, handler);
+    }
+  }
+}
+
+// Create handlers dynamically too
+function createQueryHandler(
+  table: TableInfo
+): (input: Record<string, unknown>) => Promise<string> {
+  return async (input) => {
+    const filters = (input.filters || {}) as Record<string, unknown>;
+    const sortBy = input.sort_by as string | undefined;
+    const sortOrder = (input.sort_order as string) || "asc";
+    const limit = Math.min((input.limit as number) || 10, 100);
+
+    // In production, this would run a real SQL query
+    // Here we simulate with in-memory data
+    console.log(`Querying ${table.name}:`, { filters, sortBy, sortOrder, limit });
+
+    return JSON.stringify({
+      table: table.name,
+      filters,
+      results: [], // Would come from actual DB
+      message: `Query executed on ${table.name} table`,
+    });
+  };
+}
+```
+
+### Permission-Based Tool Availability
+
+```typescript
+interface UserRole {
+  name: string;
+  allowedTools: string[]; // Tool name patterns (supports wildcards)
+}
+
+const roles: UserRole[] = [
+  { name: "viewer", allowedTools: ["query_*", "list_*"] },
+  { name: "editor", allowedTools: ["query_*", "list_*", "update_*", "create_*"] },
+  { name: "admin", allowedTools: ["*"] },
+];
+
+function getToolsForRole(
+  registry: DynamicToolRegistry,
+  role: string
+): Anthropic.Tool[] {
+  const userRole = roles.find((r) => r.name === role);
+  if (!userRole) return [];
+
+  const allTools = registry.getActiveDefinitions();
+
+  return allTools.filter((tool) =>
+    userRole.allowedTools.some((pattern) => {
+      if (pattern === "*") return true;
+      const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+      return regex.test(tool.name);
+    })
+  );
+}
+
+// Usage
+const registry = new DynamicToolRegistry();
+registry.registerFromSchema(databaseSchema);
+
+// Viewer only gets query tools
+const viewerTools = getToolsForRole(registry, "viewer");
+
+// Admin gets everything
+const adminTools = getToolsForRole(registry, "admin");
+```
+
+## Common Mistakes
+
+1. **No validation on generated schemas** -- Dynamically generated schemas can be invalid JSON Schema. Validate them before passing to the API.
+
+2. **Too many generated tools** -- If your database has 50 tables, generating a tool for each creates 50 tools. The LLM cannot handle that many. Group them or limit to relevant tables.
+
+3. **Stale schemas** -- If the database schema changes, your generated tools become outdated. Regenerate tools periodically or on schema change events.
+
+4. **Missing descriptions** -- Auto-generated descriptions like "Filter by column1" are unhelpful. Add meaningful descriptions in your table metadata.
+
+5. **SQL injection in generated queries** -- If you generate SQL from dynamic tool inputs, always use parameterized queries. Never concatenate user input into SQL strings.
+
+## Your Task
+
+Build a dynamic tool system that:
+
+1. Reads a mock database schema (3 tables: `employees`, `departments`, `projects`)
+2. Generates query tools for each table at runtime
+3. Creates handlers that filter mock in-memory data
+4. Supports a simple role system (viewer can only query, manager can query and update)
+5. Allows registering new tables without changing any handler code
+
+Test by having the LLM answer questions like "Show me all employees in the engineering department" and "List projects with a budget over 50000", where the tools are entirely generated from the schema definition.

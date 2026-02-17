@@ -1,0 +1,263 @@
+---
+title: "Data Streaming"
+description: "Learn to process data in chunks, build memory-efficient pipelines, understand backpressure, and use async iterators for large datasets."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 9
+difficulty: "intermediate"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "streaming", "chunks", "memory", "backpressure", "async-iterators"]
+---
+
+## What You'll Learn
+
+You will learn how to process large datasets without loading everything into memory at once. You will use chunking to break data into manageable pieces, async iterators to process records one-by-one, and backpressure to prevent fast producers from overwhelming slow consumers. These techniques are essential when your data is too large for `readFileSync`.
+
+## Key Concepts
+
+### Why Streaming?
+
+In the previous exercises, you loaded an entire file into memory with `readFileSync` and parsed it all at once. This works great for small files (a few MB). But what happens when your dataset is 2 GB? Or when you are processing a continuous feed of data that never ends?
+
+Streaming processes data incrementally -- a chunk at a time -- so you never need the entire dataset in memory at once. This is not just about handling big files. Streaming is also the pattern for:
+
+- Processing real-time data feeds
+- Piping data between services
+- Building pipelines where each stage processes data as it arrives
+
+### Processing Data in Chunks
+
+The simplest form of streaming is chunking: breaking a large array into smaller batches:
+
+```typescript
+function* chunk<T>(array: T[], size: number): Generator<T[]> {
+  for (let i = 0; i < array.length; i += size) {
+    yield array.slice(i, i + size);
+  }
+}
+
+// Process 1000 records in batches of 100
+const allRecords = loadRecords(); // Imagine 10,000 records
+
+for (const batch of chunk(allRecords, 100)) {
+  console.log(`Processing batch of ${batch.length} records`);
+  await processBatch(batch);
+}
+```
+
+The `function*` syntax creates a generator -- a function that produces values lazily. It only computes the next chunk when you ask for it. This is the foundation of memory-efficient processing.
+
+### Generators for Lazy Processing
+
+Generators let you build processing pipelines where each step only processes one element at a time:
+
+```typescript
+function* filterGen<T>(
+  source: Iterable<T>,
+  predicate: (item: T) => boolean
+): Generator<T> {
+  for (const item of source) {
+    if (predicate(item)) {
+      yield item;
+    }
+  }
+}
+
+function* mapGen<T, U>(
+  source: Iterable<T>,
+  transform: (item: T) => U
+): Generator<U> {
+  for (const item of source) {
+    yield transform(item);
+  }
+}
+
+// Chain generators -- no intermediate arrays created
+const records = readCSVGenerator("large-file.csv");
+const filtered = filterGen(records, (r) => r.region === "West");
+const transformed = mapGen(filtered, (r) => ({
+  ...r,
+  revenue: r.quantity * r.price,
+}));
+
+// Only now does processing actually happen
+for (const record of transformed) {
+  console.log(record);
+}
+```
+
+No intermediate arrays are created. Each record flows through the entire pipeline before the next record starts.
+
+### Async Iterators
+
+When your data source is asynchronous (reading from a file stream, an API, or a database), you need async iterators:
+
+```typescript
+async function* readLinesAsync(
+  filePath: string
+): AsyncGenerator<string> {
+  const { createReadStream } = await import("fs");
+  const { createInterface } = await import("readline");
+
+  const stream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({ input: stream });
+
+  for await (const line of rl) {
+    yield line;
+  }
+}
+
+// Process a large file line by line
+async function processLargeCSV(filePath: string): Promise<number> {
+  let count = 0;
+  let isHeader = true;
+  let headers: string[] = [];
+
+  for await (const line of readLinesAsync(filePath)) {
+    if (isHeader) {
+      headers = line.split(",");
+      isHeader = false;
+      continue;
+    }
+
+    const values = line.split(",");
+    const record = Object.fromEntries(
+      headers.map((h, i) => [h, values[i]])
+    );
+
+    // Process each record individually
+    await processRecord(record);
+    count++;
+  }
+
+  return count;
+}
+```
+
+The `for await...of` loop is the async equivalent of `for...of`. It waits for each value to be ready before processing it.
+
+### Backpressure
+
+Backpressure is what happens when a producer generates data faster than a consumer can process it. Without backpressure handling, your pipeline buffers unlimited data in memory and eventually crashes.
+
+The concept is simple: the consumer tells the producer to slow down.
+
+```typescript
+class BackpressureQueue<T> {
+  private queue: T[] = [];
+  private maxSize: number;
+  private resolveWait: (() => void) | null = null;
+
+  constructor(maxSize: number = 100) {
+    this.maxSize = maxSize;
+  }
+
+  async push(item: T): Promise<void> {
+    // If the queue is full, wait until there is room
+    while (this.queue.length >= this.maxSize) {
+      await new Promise<void>((resolve) => {
+        this.resolveWait = resolve;
+      });
+    }
+    this.queue.push(item);
+  }
+
+  pull(): T | undefined {
+    const item = this.queue.shift();
+    // Signal that there is room now
+    if (this.resolveWait) {
+      this.resolveWait();
+      this.resolveWait = null;
+    }
+    return item;
+  }
+
+  get length(): number {
+    return this.queue.length;
+  }
+}
+```
+
+### Memory-Efficient Pipeline Pattern
+
+Here is a complete pattern for processing large datasets efficiently:
+
+```typescript
+interface PipelineStats {
+  totalProcessed: number;
+  totalErrors: number;
+  peakMemoryMB: number;
+  durationMs: number;
+}
+
+async function streamingPipeline(
+  inputPath: string,
+  batchSize: number = 100
+): Promise<PipelineStats> {
+  const start = Date.now();
+  let totalProcessed = 0;
+  let totalErrors = 0;
+  let peakMemoryMB = 0;
+  let batch: Record<string, string>[] = [];
+
+  for await (const line of readLinesAsync(inputPath)) {
+    // Skip header (simplified)
+    if (totalProcessed === 0 && line.startsWith("id,")) continue;
+
+    // Parse the line into a record
+    const record = parseLine(line);
+    batch.push(record);
+
+    // Process when batch is full
+    if (batch.length >= batchSize) {
+      const result = await processBatch(batch);
+      totalProcessed += result.success;
+      totalErrors += result.errors;
+
+      // Track memory usage
+      const memUsage = process.memoryUsage().heapUsed / 1024 / 1024;
+      peakMemoryMB = Math.max(peakMemoryMB, memUsage);
+
+      batch = []; // Release the batch for garbage collection
+    }
+  }
+
+  // Process remaining records
+  if (batch.length > 0) {
+    const result = await processBatch(batch);
+    totalProcessed += result.success;
+    totalErrors += result.errors;
+  }
+
+  return {
+    totalProcessed,
+    totalErrors,
+    peakMemoryMB,
+    durationMs: Date.now() - start,
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+AI applications often need to process large datasets:
+
+- **Embedding generation**: Process 100,000 documents by sending batches to an embedding API
+- **Batch classification**: Classify thousands of support tickets, 50 at a time, to stay within rate limits
+- **RAG indexing**: Build a vector database from a large corpus without loading it all into memory
+- **Log analysis**: Process streaming server logs to detect anomalies in real-time
+
+Without streaming, these tasks either crash from memory exhaustion or take forever because they cannot start processing until all data is loaded.
+
+## Common Mistakes
+
+- **Loading everything into memory "just to be safe."** If your data might grow, design for streaming from the start. It is harder to add streaming later.
+- **Forgetting to process the last batch.** After the loop ends, there are usually leftover records in the current batch. Always process them.
+- **Not handling errors per-batch.** If one batch fails, you should log the error and continue with the next batch, not crash the entire pipeline.
+- **Making batch size too small.** Processing one record at a time has high overhead. Batch sizes of 50-500 are typical, depending on the operation.
+- **Ignoring memory tracking.** Use `process.memoryUsage()` to verify that your streaming pipeline actually uses constant memory. If memory keeps growing, you have a leak.
+
+## Your Task
+
+Build a streaming pipeline that processes a large dataset in configurable batch sizes. Use an async generator to read data, process each batch with a transform function, track memory usage and error counts, and return pipeline statistics including total processed, total errors, peak memory, and duration.

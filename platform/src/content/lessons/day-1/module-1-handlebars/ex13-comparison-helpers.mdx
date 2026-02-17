@@ -1,0 +1,246 @@
+---
+title: "Comparison Helpers"
+description: "Building eq, gt, gte, lt, lte, and, or helpers to add logical comparisons to Handlebars templates."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 13
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "helpers", "comparison", "logic", "conditionals"]
+---
+
+## What You'll Learn
+
+You will learn how to build comparison helpers (`eq`, `gt`, `gte`, `lt`, `lte`) and logical helpers (`and`, `or`) that enable condition-based rendering in Handlebars templates, solving the "no operators in `{{#if}}`" limitation.
+
+## Key Concepts
+
+### The Problem: No Operators in `{{#if}}`
+
+As you learned in Exercise 5, Handlebars `{{#if}}` only checks truthiness. It cannot compare values:
+
+```typescript
+// None of these work:
+// {{#if (score > 90)}}     -- syntax error
+// {{#if score === "A"}}    -- syntax error
+// {{#if age >= 18}}        -- syntax error
+```
+
+Comparison helpers solve this. You register helpers that perform comparisons and return booleans, then use them inside `{{#if}}` blocks with subexpression syntax.
+
+### The Equality Helper: `eq`
+
+The most common comparison is equality. Here is how to build an `eq` helper:
+
+```typescript
+import Handlebars from "handlebars";
+
+Handlebars.registerHelper("eq", function (a: any, b: any) {
+  return a === b;
+});
+```
+
+Now you can use it inside `{{#if}}` with the **subexpression** syntax `(helperName args)`:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if (eq role "admin")}}
+  You have administrator access.
+{{else}}
+  You have standard access.
+{{/if}}
+`);
+
+console.log(template({ role: "admin" }));
+// "You have administrator access."
+
+console.log(template({ role: "viewer" }));
+// "You have standard access."
+```
+
+The parentheses `(eq role "admin")` call the `eq` helper and pass its return value to `{{#if}}`. If `eq` returns `true`, the block renders.
+
+### Numeric Comparison Helpers
+
+Here is the full set of comparison helpers:
+
+```typescript
+Handlebars.registerHelper("eq", function (a: any, b: any) {
+  return a === b;
+});
+
+Handlebars.registerHelper("neq", function (a: any, b: any) {
+  return a !== b;
+});
+
+Handlebars.registerHelper("gt", function (a: number, b: number) {
+  return a > b;
+});
+
+Handlebars.registerHelper("gte", function (a: number, b: number) {
+  return a >= b;
+});
+
+Handlebars.registerHelper("lt", function (a: number, b: number) {
+  return a < b;
+});
+
+Handlebars.registerHelper("lte", function (a: number, b: number) {
+  return a <= b;
+});
+```
+
+Using them in templates:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if (gt score 90)}}
+Grade: A
+{{else if (gt score 80)}}
+Grade: B
+{{else if (gt score 70)}}
+Grade: C
+{{else}}
+Grade: F
+{{/if}}
+`);
+
+console.log(template({ score: 95 }));  // "Grade: A"
+console.log(template({ score: 85 }));  // "Grade: B"
+console.log(template({ score: 65 }));  // "Grade: F"
+```
+
+Notice the `{{else if (gt score 80)}}` syntax. Handlebars supports `else if` chains, and each condition can use a helper subexpression.
+
+### Logical Helpers: `and` and `or`
+
+For combining conditions, build `and` and `or` helpers:
+
+```typescript
+Handlebars.registerHelper("and", function (a: any, b: any) {
+  return a && b;
+});
+
+Handlebars.registerHelper("or", function (a: any, b: any) {
+  return a || b;
+});
+
+Handlebars.registerHelper("not", function (a: any) {
+  return !a;
+});
+```
+
+Now you can express compound conditions:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if (and isActive hasPermission)}}
+  You can perform this action.
+{{/if}}
+
+{{#if (or isAdmin isModerator)}}
+  You can moderate content.
+{{/if}}
+
+{{#if (not isBlocked)}}
+  Account is in good standing.
+{{/if}}
+`);
+
+const result = template({
+  isActive: true,
+  hasPermission: true,
+  isAdmin: false,
+  isModerator: true,
+  isBlocked: false,
+});
+```
+
+### Nesting Subexpressions
+
+You can nest subexpressions to build more complex conditions:
+
+```typescript
+const template = Handlebars.compile(`
+{{#if (and (gte age 18) (not isBanned))}}
+  Access granted.
+{{else}}
+  Access denied.
+{{/if}}
+`);
+
+const result = template({ age: 21, isBanned: false });
+// "Access granted."
+```
+
+The inner `(gte age 18)` runs first, then `(not isBanned)` runs, and finally `(and ...)` combines their results.
+
+### Classification Patterns in AI Engineering
+
+Comparison helpers are essential for building prompt templates that adapt based on data characteristics:
+
+```typescript
+Handlebars.registerHelper("eq", function (a: any, b: any) { return a === b; });
+Handlebars.registerHelper("gt", function (a: number, b: number) { return a > b; });
+Handlebars.registerHelper("lte", function (a: number, b: number) { return a <= b; });
+
+const template = Handlebars.compile(`
+{{#if (eq taskType "classification")}}
+Classify the following text into one of these categories: {{categories}}
+{{else if (eq taskType "summarization")}}
+Summarize the following text in {{maxWords}} words or fewer.
+{{else if (eq taskType "translation")}}
+Translate the following text from {{sourceLang}} to {{targetLang}}.
+{{/if}}
+
+{{#if (gt contextLength 4000)}}
+Note: The text is long. Focus on the key points.
+{{/if}}
+
+{{#if (lte confidence 0.5)}}
+If you are not confident in your response, say so.
+{{/if}}
+
+Text: {{inputText}}
+`);
+```
+
+This single template handles three different AI tasks and adjusts instructions based on input size and confidence thresholds. The comparison helpers make the template self-adapting.
+
+### Registering All Helpers at Once
+
+In practice, you will register these helpers once at application startup. Here is a clean pattern:
+
+```typescript
+function registerComparisonHelpers(): void {
+  const helpers: Record<string, (...args: any[]) => any> = {
+    eq: (a: any, b: any) => a === b,
+    neq: (a: any, b: any) => a !== b,
+    gt: (a: number, b: number) => a > b,
+    gte: (a: number, b: number) => a >= b,
+    lt: (a: number, b: number) => a < b,
+    lte: (a: number, b: number) => a <= b,
+    and: (a: any, b: any) => a && b,
+    or: (a: any, b: any) => a || b,
+    not: (a: any) => !a,
+  };
+
+  for (const [name, fn] of Object.entries(helpers)) {
+    Handlebars.registerHelper(name, fn);
+  }
+}
+
+registerComparisonHelpers();
+```
+
+## Common Mistakes
+
+- **Forgetting the parentheses for subexpressions.** `{{#if eq role "admin"}}` is wrong -- it tries to check the truthiness of the `eq` helper itself. You need `{{#if (eq role "admin")}}` with parentheses.
+- **Using `==` instead of `===` in the helper.** Always use strict equality (`===`) to avoid JavaScript type coercion surprises where `0 == ""` is `true`.
+- **Deeply nesting subexpressions.** `{{#if (and (or (eq a 1) (eq b 2)) (not (lt c 0)))}}` is valid but unreadable. If you need complex logic, compute a boolean flag in JavaScript before passing it to the template.
+- **Forgetting that `and` and `or` return the actual values, not booleans.** JavaScript `&&` returns the first falsy value or the last value, and `||` returns the first truthy value. In most cases this works fine with `{{#if}}`, but be aware of the nuance.
+
+## Your Task
+
+Register the full set of comparison helpers (`eq`, `gt`, `gte`, `lt`, `lte`) and logical helpers (`and`, `or`, `not`). Build a template that uses at least three different comparison helpers and one logical helper to conditionally render different content based on numeric and string values.

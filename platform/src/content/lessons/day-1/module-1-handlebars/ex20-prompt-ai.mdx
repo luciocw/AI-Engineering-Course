@@ -1,0 +1,440 @@
+---
+title: "AI Prompt Composition System"
+description: "Capstone exercise: building a full AI prompt composition system with Handlebars, connecting Module 1 to Module 2."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 20
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["handlebars", "templates", "ai-prompts", "capstone", "system-prompts", "few-shot", "composition"]
+---
+
+## What You'll Learn
+
+You will bring together everything from Module 1 to build a production-quality AI prompt composition system. This system uses Handlebars templates, helpers, partials, validation, and the registry pattern to dynamically generate prompts for LLM APIs -- the exact skill you will apply in Module 2 when you connect to real AI models.
+
+## Key Concepts
+
+### The Big Picture: From Templates to AI
+
+Throughout Module 1, you have learned:
+
+- Basic template syntax (`{{variable}}`, `{{{raw}}}`)
+- Conditionals (`{{#if}}`, `{{#unless}}`)
+- Loops (`{{#each}}`)
+- Helpers (inline, block, comparison, chained)
+- Partials and layouts
+- Registry pattern for organization
+- Security with Zod validation
+
+Now you will combine all of these into a system that generates prompts for AI models. This is the bridge to Module 2, where you will send these prompts to actual LLM APIs.
+
+### What Is a Prompt Composition System?
+
+A prompt composition system takes structured inputs (user query, context, configuration) and produces a well-formatted prompt string ready to send to an AI model. It handles:
+
+1. **System prompts** -- Instructions that tell the AI how to behave
+2. **Few-shot examples** -- Input-output pairs that show the AI what you expect
+3. **Context injection** -- Relevant data the AI needs to answer
+4. **Dynamic adaptation** -- Adjusting the prompt based on task type, user preferences, and available data
+
+### Step 1: Define the Prompt Registry
+
+Start with an isolated Handlebars environment and register your standard helpers:
+
+```typescript
+import Handlebars from "handlebars";
+import { z } from "zod";
+
+class PromptComposer {
+  private hbs: typeof Handlebars;
+  private templates: Map<string, HandlebarsTemplateDelegate>;
+
+  constructor() {
+    this.hbs = Handlebars.create();
+    this.templates = new Map();
+    this.registerStandardHelpers();
+    this.registerStandardPartials();
+  }
+
+  private registerStandardHelpers(): void {
+    // Comparison helpers
+    this.hbs.registerHelper("eq", (a: any, b: any) => a === b);
+    this.hbs.registerHelper("gt", (a: number, b: number) => a > b);
+    this.hbs.registerHelper("lt", (a: number, b: number) => a < b);
+    this.hbs.registerHelper("and", (a: any, b: any) => a && b);
+    this.hbs.registerHelper("or", (a: any, b: any) => a || b);
+    this.hbs.registerHelper("not", (a: any) => !a);
+
+    // Formatting helpers
+    this.hbs.registerHelper("uppercase", (s: string) =>
+      typeof s === "string" ? s.toUpperCase() : ""
+    );
+
+    this.hbs.registerHelper("truncateWords", (s: string, max: number) => {
+      if (typeof s !== "string") return "";
+      const words = s.split(/\s+/);
+      return words.length <= max ? s : words.slice(0, max).join(" ") + "...";
+    });
+
+    this.hbs.registerHelper("json", (obj: any) => {
+      return JSON.stringify(obj, null, 2);
+    });
+
+    // AI-specific helpers
+    this.hbs.registerHelper("tokenEstimate", (s: string) => {
+      if (typeof s !== "string") return 0;
+      return Math.ceil(s.length / 4);
+    });
+  }
+
+  private registerStandardPartials(): void {
+    // Defined in the next step
+  }
+
+  registerTemplate(name: string, template: string): void {
+    this.templates.set(name, this.hbs.compile(template));
+  }
+
+  render(name: string, context: Record<string, any>): string {
+    const template = this.templates.get(name);
+    if (!template) throw new Error(`Template "${name}" not found.`);
+    return template(context);
+  }
+}
+```
+
+### Step 2: Register Reusable Prompt Partials
+
+Partials define the building blocks that every prompt might need:
+
+```typescript
+private registerStandardPartials(): void {
+  // System role partial
+  this.hbs.registerPartial(
+    "systemRole",
+    `You are a {{role}} assistant.{{#if expertise}} You specialize in {{expertise}}.{{/if}}`
+  );
+
+  // Few-shot examples partial
+  this.hbs.registerPartial(
+    "fewShotExamples",
+    `{{#if examples}}
+Here are some examples of the expected input and output:
+
+{{#each examples}}
+Input: {{this.input}}
+Output: {{this.output}}
+{{#unless @last}}
+{{/unless}}
+{{/each}}
+
+Now process the following:
+{{/if}}`
+  );
+
+  // Output format instruction partial
+  this.hbs.registerPartial(
+    "outputFormat",
+    `{{#if (eq format "json")}}
+Respond with valid JSON only. No markdown, no explanation.
+{{else if (eq format "markdown")}}
+Respond in well-formatted Markdown.
+{{else if (eq format "bullets")}}
+Respond as a bulleted list. One point per bullet.
+{{else}}
+Respond in plain text.
+{{/if}}`
+  );
+
+  // Context documents partial
+  this.hbs.registerPartial(
+    "contextDocuments",
+    `{{#if documents}}
+Reference the following documents in your response:
+
+{{#each documents}}
+--- Document {{@index}}: {{this.title}} ---
+{{truncateWords this.content 500}}
+{{/each}}
+{{/if}}`
+  );
+
+  // Constraints partial
+  this.hbs.registerPartial(
+    "constraints",
+    `{{#if constraints}}
+
+Constraints:
+{{#each constraints}}
+- {{this}}
+{{/each}}
+{{/if}}`
+  );
+}
+```
+
+### Step 3: Build Task-Specific Templates
+
+With the partials in place, task-specific templates become concise:
+
+```typescript
+const composer = new PromptComposer();
+
+// Classification template
+composer.registerTemplate("classify", `
+{{> systemRole}}
+
+{{> fewShotExamples}}
+
+{{> outputFormat}}
+
+Classify the following text into one of these categories: {{categories}}.
+
+Text: {{userInput}}
+
+Category:
+`);
+
+// Summarization template
+composer.registerTemplate("summarize", `
+{{> systemRole}}
+
+{{> contextDocuments}}
+
+{{> outputFormat}}
+
+{{#if (gt (tokenEstimate userInput) 1000)}}
+The following text is long. Focus on the key points and main arguments.
+{{/if}}
+
+Summarize the following:
+
+{{userInput}}
+
+{{> constraints}}
+`);
+
+// Q&A with context template
+composer.registerTemplate("qa", `
+{{> systemRole}}
+
+{{> contextDocuments}}
+
+{{> fewShotExamples}}
+
+{{#if conversationHistory}}
+Previous conversation:
+{{#each conversationHistory}}
+{{this.role}}: {{this.content}}
+{{/each}}
+{{/if}}
+
+User question: {{userInput}}
+
+{{> outputFormat}}
+
+{{> constraints}}
+`);
+```
+
+### Step 4: Add Validation
+
+Each template gets a Zod schema to ensure the data is valid and safe:
+
+```typescript
+function sanitizeInput(s: string): string {
+  return s
+    .replace(/\b(ignore|forget|disregard)\s+(all\s+)?(previous|above)\s+(instructions?|prompts?)\b/gi, "[filtered]")
+    .replace(/\b(system|assistant)\s*:/gi, "[role]:");
+}
+
+const ClassifySchema = z.object({
+  role: z.string().default("classification"),
+  expertise: z.string().optional(),
+  categories: z.string().min(1),
+  userInput: z.string().min(1).max(5000).transform(sanitizeInput),
+  format: z.enum(["json", "markdown", "bullets", "text"]).default("text"),
+  examples: z.array(
+    z.object({
+      input: z.string(),
+      output: z.string(),
+    })
+  ).optional().default([]),
+});
+
+const SummarizeSchema = z.object({
+  role: z.string().default("summarization"),
+  expertise: z.string().optional(),
+  userInput: z.string().min(1).max(50000).transform(sanitizeInput),
+  format: z.enum(["json", "markdown", "bullets", "text"]).default("bullets"),
+  documents: z.array(
+    z.object({
+      title: z.string(),
+      content: z.string().max(10000),
+    })
+  ).optional().default([]),
+  constraints: z.array(z.string()).optional().default([]),
+});
+
+const QASchema = z.object({
+  role: z.string().default("question-answering"),
+  expertise: z.string().optional(),
+  userInput: z.string().min(1).max(5000).transform(sanitizeInput),
+  format: z.enum(["json", "markdown", "bullets", "text"]).default("text"),
+  documents: z.array(
+    z.object({
+      title: z.string(),
+      content: z.string().max(10000),
+    })
+  ).optional().default([]),
+  examples: z.array(
+    z.object({
+      input: z.string(),
+      output: z.string(),
+    })
+  ).optional().default([]),
+  conversationHistory: z.array(
+    z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.string().max(5000),
+    })
+  ).optional().default([]),
+  constraints: z.array(z.string()).optional().default([]),
+});
+```
+
+### Step 5: The Complete Prompt Composer
+
+Bring it all together with a unified API:
+
+```typescript
+class PromptComposer {
+  // ... previous code ...
+
+  private schemas: Map<string, z.ZodType> = new Map();
+
+  registerSchema(templateName: string, schema: z.ZodType): void {
+    this.schemas.set(templateName, schema);
+  }
+
+  compose(templateName: string, rawData: unknown): string {
+    // Step 1: Find the schema
+    const schema = this.schemas.get(templateName);
+    if (!schema) {
+      throw new Error(`No schema registered for template "${templateName}".`);
+    }
+
+    // Step 2: Validate and sanitize
+    const result = schema.safeParse(rawData);
+    if (!result.success) {
+      const issues = result.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new Error(`Validation failed for "${templateName}": ${issues}`);
+    }
+
+    // Step 3: Render
+    return this.render(templateName, result.data);
+  }
+}
+
+// Usage
+const composer = new PromptComposer();
+
+// Register templates and schemas
+composer.registerTemplate("classify", classifyTemplateString);
+composer.registerSchema("classify", ClassifySchema);
+
+// Compose a prompt (validated and sanitized)
+const prompt = composer.compose("classify", {
+  categories: "positive, negative, neutral",
+  userInput: "I absolutely love this product! Best purchase ever.",
+  examples: [
+    { input: "This is terrible", output: "negative" },
+    { input: "It works fine", output: "neutral" },
+  ],
+  format: "text",
+});
+```
+
+### Dynamic Few-Shot Examples
+
+Few-shot examples teach the AI by demonstration. The number and selection of examples can be dynamic:
+
+```typescript
+composer.registerTemplate("dynamicFewShot", `
+{{> systemRole}}
+
+{{#if examples}}
+{{#if (gt examples.length 3)}}
+Here are {{examples.length}} examples to guide your response:
+{{else}}
+Examples:
+{{/if}}
+
+{{#each examples}}
+---
+Input: {{this.input}}
+Expected Output: {{this.output}}
+{{#if this.explanation}}
+Why: {{this.explanation}}
+{{/if}}
+{{/each}}
+---
+{{/if}}
+
+Now process this input:
+{{userInput}}
+`);
+```
+
+In Module 2, you will learn how to select the best examples dynamically based on similarity to the user's input. For now, the template supports any number of examples, including zero.
+
+### Connecting to Module 2
+
+The prompt string this system produces is exactly what you will send to an LLM API in Module 2. The connection looks like this:
+
+```typescript
+// Module 1: Compose the prompt
+const prompt = composer.compose("classify", {
+  categories: "bug, feature-request, question",
+  userInput: "The login page crashes when I enter my email",
+  examples: [
+    { input: "Add dark mode", output: "feature-request" },
+    { input: "How do I reset my password?", output: "question" },
+  ],
+});
+
+// Module 2 (preview): Send to an LLM
+// const response = await openai.chat.completions.create({
+//   model: "gpt-4",
+//   messages: [{ role: "user", content: prompt }],
+// });
+```
+
+Everything you built in Module 1 -- templates, helpers, partials, validation -- feeds into the API call you will make in Module 2. The prompt composition system is your interface between your application logic and the AI model.
+
+### Architecture Summary
+
+The complete system has these layers:
+
+1. **Helpers** -- Reusable logic (comparisons, formatting, truncation)
+2. **Partials** -- Reusable template fragments (system role, few-shot, output format)
+3. **Templates** -- Task-specific prompt structures (classify, summarize, Q&A)
+4. **Schemas** -- Zod validation for each template's expected data
+5. **Composer** -- The orchestrator that validates, sanitizes, and renders
+
+Each layer is independently testable. You can test a helper with a unit test, a partial with a simple template, and the full system with integration tests.
+
+## Common Mistakes
+
+- **Building prompts with string concatenation instead of templates.** String concatenation is fragile, untestable, and impossible to maintain at scale. Always use templates.
+- **Skipping validation for "internal" data.** Even if the data comes from your own database, validate it. Data sources change, schemas evolve, and bugs happen. Validation catches problems early.
+- **Putting too much logic in templates.** Templates should be primarily structure. If you find yourself needing complex calculations or data transformations, do that in JavaScript and pass the results as simple values.
+- **Not testing prompts with edge cases.** Test with empty arrays, very long strings, special characters, and missing optional fields. These edge cases reveal template bugs that normal data hides.
+
+## Your Task
+
+Build a complete `PromptComposer` that supports at least two different task templates (such as classification and summarization). Each template should use partials for shared structure, helpers for formatting, and a Zod schema for validation. Demonstrate composing a prompt for each task type with realistic data, including few-shot examples for at least one template. Verify that invalid data is rejected with clear error messages.

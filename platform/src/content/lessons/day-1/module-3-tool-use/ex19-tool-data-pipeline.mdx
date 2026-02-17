@@ -1,0 +1,341 @@
+---
+title: "Tool-Sourced Data Pipelines"
+description: "Feed tool results into data pipelines, perform ETL with tool-sourced data, and build cross-module integrations between tools and data processing."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 19
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "data-pipeline", "etl", "cross-module", "module-4-integration", "advanced"]
+---
+
+## What You'll Learn
+
+- How to feed tool results into downstream data processing pipelines
+- Building ETL (Extract, Transform, Load) workflows with tools as the extraction layer
+- Accumulating and aggregating data across multiple tool calls
+- Cross-module integration patterns connecting tools (M3) with structured output / data processing (M4)
+
+## Key Concepts
+
+### Tools as Data Sources
+
+Tools are not just for answering one-off questions. They can serve as the **extraction** layer in a data pipeline:
+
+```
+Extract (Tools)  →  Transform (Code)  →  Load (Storage/Output)
+─────────────       ───────────────       ─────────────────────
+get_sales_data       aggregate by region   write to CSV
+get_user_metrics     calculate averages    update dashboard
+search_products      normalize prices      insert into DB
+```
+
+### The DataCollector Pattern
+
+Accumulate data from multiple tool calls into a structured dataset:
+
+```typescript
+interface DataRecord {
+  source: string;      // Which tool produced this
+  timestamp: string;   // When it was collected
+  data: Record<string, unknown>;
+}
+
+class DataCollector {
+  private records: DataRecord[] = [];
+
+  add(source: string, data: Record<string, unknown>): void {
+    this.records.push({
+      source,
+      timestamp: new Date().toISOString(),
+      data,
+    });
+  }
+
+  getAll(): DataRecord[] {
+    return [...this.records];
+  }
+
+  getBySource(source: string): DataRecord[] {
+    return this.records.filter((r) => r.source === source);
+  }
+
+  toJSON(): string {
+    return JSON.stringify(this.records, null, 2);
+  }
+
+  toCSV(): string {
+    if (this.records.length === 0) return "";
+
+    // Collect all unique keys across all records
+    const allKeys = new Set<string>();
+    for (const record of this.records) {
+      Object.keys(record.data).forEach((k) => allKeys.add(k));
+    }
+
+    const headers = ["source", "timestamp", ...Array.from(allKeys)];
+    const rows = this.records.map((r) =>
+      [
+        r.source,
+        r.timestamp,
+        ...Array.from(allKeys).map((k) => String(r.data[k] ?? "")),
+      ].join(",")
+    );
+
+    return [headers.join(","), ...rows].join("\n");
+  }
+}
+```
+
+### Tool Handlers that Feed the Pipeline
+
+Modify your tool handlers to collect data as they execute:
+
+```typescript
+const collector = new DataCollector();
+
+const toolHandlers: Record<string, (input: Record<string, unknown>) => Promise<string>> = {
+  get_sales_data: async (input) => {
+    const region = input.region as string;
+    const period = input.period as string;
+
+    // Simulate fetching sales data
+    const salesData = {
+      region,
+      period,
+      revenue: Math.random() * 100000,
+      orders: Math.floor(Math.random() * 500),
+      avgOrderValue: Math.random() * 200,
+    };
+
+    // Feed into the collector
+    collector.add("get_sales_data", salesData);
+
+    return JSON.stringify(salesData);
+  },
+
+  get_user_metrics: async (input) => {
+    const segment = input.segment as string;
+
+    const metrics = {
+      segment,
+      activeUsers: Math.floor(Math.random() * 10000),
+      retention: Math.random() * 0.4 + 0.6, // 60-100%
+      avgSessionMinutes: Math.random() * 30 + 5,
+    };
+
+    collector.add("get_user_metrics", metrics);
+
+    return JSON.stringify(metrics);
+  },
+};
+```
+
+### ETL Pipeline with Tools
+
+A full Extract-Transform-Load pipeline using tools as the extraction layer:
+
+```typescript
+interface ETLPipeline<TRaw, TTransformed, TOutput> {
+  extract: () => Promise<TRaw[]>;
+  transform: (raw: TRaw[]) => TTransformed[];
+  load: (data: TTransformed[]) => Promise<TOutput>;
+}
+
+// Example: Sales report pipeline
+interface RawSalesData {
+  region: string;
+  revenue: number;
+  orders: number;
+}
+
+interface TransformedSalesData {
+  region: string;
+  revenue: number;
+  orders: number;
+  avgOrderValue: number;
+  revenueFormatted: string;
+}
+
+interface SalesReport {
+  generatedAt: string;
+  totalRevenue: number;
+  totalOrders: number;
+  byRegion: TransformedSalesData[];
+}
+
+const salesPipeline: ETLPipeline<RawSalesData, TransformedSalesData, SalesReport> = {
+  // Extract: Use tools to gather data from multiple regions
+  extract: async () => {
+    const regions = ["North America", "Europe", "Asia Pacific"];
+    const results: RawSalesData[] = [];
+
+    for (const region of regions) {
+      const result = await toolHandlers.get_sales_data({ region, period: "Q4-2024" });
+      results.push(JSON.parse(result));
+    }
+
+    return results;
+  },
+
+  // Transform: Clean, calculate, format
+  transform: (raw) => {
+    return raw.map((item) => ({
+      ...item,
+      avgOrderValue: item.orders > 0 ? item.revenue / item.orders : 0,
+      revenueFormatted: `$${item.revenue.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`,
+    }));
+  },
+
+  // Load: Generate the final report
+  load: async (data) => {
+    const report: SalesReport = {
+      generatedAt: new Date().toISOString(),
+      totalRevenue: data.reduce((sum, item) => sum + item.revenue, 0),
+      totalOrders: data.reduce((sum, item) => sum + item.orders, 0),
+      byRegion: data.sort((a, b) => b.revenue - a.revenue),
+    };
+
+    return report;
+  },
+};
+
+// Run the pipeline
+async function generateSalesReport(): Promise<SalesReport> {
+  const raw = await salesPipeline.extract();
+  const transformed = salesPipeline.transform(raw);
+  const report = await salesPipeline.load(transformed);
+  return report;
+}
+```
+
+### Integrating with the Tool Loop
+
+Wire the pipeline into the tool use loop so the LLM can trigger data collection:
+
+```typescript
+const pipelineTools: Anthropic.Tool[] = [
+  {
+    name: "collect_regional_data",
+    description:
+      "Collect sales data for a specific region and add it to the report pipeline. " +
+      "Call this for each region you want to include in the report.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        region: {
+          type: "string",
+          description: "Region name, e.g. 'North America', 'Europe'",
+        },
+        period: {
+          type: "string",
+          description: "Time period, e.g. 'Q4-2024', '2024-01'",
+        },
+      },
+      required: ["region", "period"],
+    },
+  },
+  {
+    name: "generate_report",
+    description:
+      "Generate a summary report from all collected data. " +
+      "Call this AFTER collecting data from all desired regions. " +
+      "Returns a formatted report with totals and per-region breakdown.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        format: {
+          type: "string",
+          enum: ["summary", "detailed", "csv"],
+          description: "Report format (default: summary)",
+        },
+      },
+      required: [],
+    },
+  },
+];
+
+// The LLM can now be asked: "Generate a sales report for all regions in Q4"
+// It will:
+// 1. Call collect_regional_data for each region
+// 2. Call generate_report to produce the final output
+```
+
+### Streaming Data Through the Pipeline
+
+For large datasets, process data in chunks rather than collecting everything in memory:
+
+```typescript
+interface StreamProcessor<T> {
+  onData: (item: T) => void;
+  onComplete: () => string;
+}
+
+function createAggregator(): StreamProcessor<RawSalesData> {
+  let totalRevenue = 0;
+  let totalOrders = 0;
+  let regionCount = 0;
+
+  return {
+    onData: (item) => {
+      totalRevenue += item.revenue;
+      totalOrders += item.orders;
+      regionCount++;
+    },
+    onComplete: () => {
+      return JSON.stringify({
+        totalRevenue,
+        totalOrders,
+        regionCount,
+        avgRevenuePerRegion: regionCount > 0 ? totalRevenue / regionCount : 0,
+      });
+    },
+  };
+}
+
+// Use in tool handler
+const aggregator = createAggregator();
+
+const toolHandlers = {
+  collect_data: async (input: Record<string, unknown>) => {
+    const data = await fetchSalesData(input.region as string);
+    aggregator.onData(data);
+    return JSON.stringify({ status: "collected", region: input.region });
+  },
+  finalize_report: async () => {
+    return aggregator.onComplete();
+  },
+};
+```
+
+## Common Mistakes
+
+1. **Not separating extraction from transformation** -- Putting transform logic inside tool handlers makes them hard to test and reuse. Keep handlers focused on extraction.
+
+2. **Memory issues with large datasets** -- If each tool call returns thousands of records, collecting them all in memory can be a problem. Use streaming or pagination.
+
+3. **Losing data on errors** -- If the pipeline fails midway, you lose all collected data. Save intermediate results to disk or a database.
+
+4. **Not deduplicating** -- If the LLM calls the same tool twice with the same arguments (which happens), you get duplicate data. Add deduplication to your collector.
+
+5. **Tight coupling between tools and pipelines** -- Tools should return raw data. The pipeline should handle formatting and aggregation. If a tool returns pre-formatted data, you lose flexibility.
+
+## Your Task
+
+Build a market research data pipeline with three tools:
+
+1. `fetch_company_info` -- returns mock company data (name, industry, revenue, employees)
+2. `fetch_market_data` -- returns mock market data (market size, growth rate, competitors)
+3. `generate_analysis` -- aggregates all collected data into a formatted report
+
+Create a `DataCollector` class that accumulates results from the first two tools. The `generate_analysis` tool should:
+- Aggregate data from the collector
+- Calculate summary statistics (total market size, average growth rate)
+- Format the output as a structured report
+- Support both JSON and CSV output formats
+
+Test by asking the LLM to "Research the cloud computing market -- look up AWS, Azure, and GCP, then generate a competitive analysis report."

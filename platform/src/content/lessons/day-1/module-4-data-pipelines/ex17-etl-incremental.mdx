@@ -1,0 +1,351 @@
+---
+title: "Incremental ETL"
+description: "Learn to process only new or changed data using watermarks, checkpoints, and incremental refresh strategies."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 17
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "etl", "incremental", "watermarks", "checkpoints", "delta"]
+---
+
+## What You'll Learn
+
+You will learn how to make your ETL pipeline efficient by processing only new or changed data instead of reprocessing everything. You will implement watermarks to track progress, checkpoints to enable recovery, and understand when to use incremental versus full refresh. These patterns reduce cost and processing time dramatically.
+
+## Key Concepts
+
+### Why Incremental Processing?
+
+Imagine you have a CSV that grows by 100 rows every hour. A full-refresh pipeline reprocesses all rows every time -- 100 rows the first hour, 200 the second, 300 the third. After a day, you are processing 2,400 rows to handle 100 new ones.
+
+An incremental pipeline processes only the new 100 rows each time. This matters enormously for AI pipelines where each record might require an LLM API call costing real money.
+
+### Watermarks
+
+A watermark is a marker that tracks how far your pipeline has processed. The simplest watermark is a timestamp or row number:
+
+```typescript
+interface Watermark {
+  field: string;         // Which field to track (e.g., "updatedAt", "id")
+  value: string | number; // Last processed value
+  updatedAt: string;      // When the watermark was set
+}
+
+class WatermarkStore {
+  private watermarks: Map<string, Watermark> = new Map();
+  private filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+    this.load();
+  }
+
+  private load(): void {
+    try {
+      const data = readFileSync(this.filePath, "utf-8");
+      const entries: [string, Watermark][] = JSON.parse(data);
+      this.watermarks = new Map(entries);
+    } catch {
+      // File does not exist yet, start fresh
+    }
+  }
+
+  private save(): void {
+    const entries = Array.from(this.watermarks.entries());
+    writeFileSync(this.filePath, JSON.stringify(entries, null, 2), "utf-8");
+  }
+
+  get(pipelineId: string): Watermark | undefined {
+    return this.watermarks.get(pipelineId);
+  }
+
+  set(pipelineId: string, watermark: Watermark): void {
+    this.watermarks.set(pipelineId, {
+      ...watermark,
+      updatedAt: new Date().toISOString(),
+    });
+    this.save();
+  }
+
+  clear(pipelineId: string): void {
+    this.watermarks.delete(pipelineId);
+    this.save();
+  }
+}
+```
+
+### Extracting Only New Records
+
+Use the watermark to filter for records newer than the last processed one:
+
+```typescript
+interface IncrementalSource<T> {
+  name: string;
+  extractSince(watermark: Watermark | undefined): Promise<{
+    records: T[];
+    newWatermark: Watermark;
+  }>;
+}
+
+class IncrementalCSVSource implements IncrementalSource<Record<string, string>> {
+  name: string;
+
+  constructor(
+    private filePath: string,
+    private watermarkField: string = "id"
+  ) {
+    this.name = `incremental-csv:${filePath}`;
+  }
+
+  async extractSince(
+    watermark: Watermark | undefined
+  ): Promise<{
+    records: Record<string, string>[];
+    newWatermark: Watermark;
+  }> {
+    // Read all records
+    const raw = readFileSync(this.filePath, "utf-8");
+    const allRecords: Record<string, string>[] = parse(raw, {
+      columns: true,
+      skip_empty_lines: true,
+    });
+
+    // Filter to only new records
+    let newRecords: Record<string, string>[];
+
+    if (!watermark) {
+      // No watermark = first run, process everything
+      newRecords = allRecords;
+    } else {
+      // Filter records after the watermark
+      newRecords = allRecords.filter((record) => {
+        const value = record[this.watermarkField];
+        if (typeof watermark.value === "number") {
+          return Number(value) > watermark.value;
+        }
+        return value > String(watermark.value);
+      });
+    }
+
+    // Compute new watermark from the last record
+    const lastRecord = allRecords[allRecords.length - 1];
+    const newWatermark: Watermark = {
+      field: this.watermarkField,
+      value: lastRecord?.[this.watermarkField] ?? watermark?.value ?? "",
+      updatedAt: new Date().toISOString(),
+    };
+
+    return { records: newRecords, newWatermark };
+  }
+}
+```
+
+### Checkpoints for Recovery
+
+A checkpoint saves the pipeline state so it can resume after a failure:
+
+```typescript
+interface Checkpoint {
+  pipelineId: string;
+  stage: string;
+  processedCount: number;
+  lastProcessedId: string | null;
+  intermediateData?: unknown;
+  timestamp: string;
+}
+
+class CheckpointStore {
+  private checkpoints: Map<string, Checkpoint> = new Map();
+  private filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+    this.load();
+  }
+
+  private load(): void {
+    try {
+      const data = readFileSync(this.filePath, "utf-8");
+      const entries: [string, Checkpoint][] = JSON.parse(data);
+      this.checkpoints = new Map(entries);
+    } catch {
+      // File does not exist yet
+    }
+  }
+
+  private save(): void {
+    const entries = Array.from(this.checkpoints.entries());
+    writeFileSync(this.filePath, JSON.stringify(entries, null, 2), "utf-8");
+  }
+
+  saveCheckpoint(checkpoint: Checkpoint): void {
+    this.checkpoints.set(checkpoint.pipelineId, checkpoint);
+    this.save();
+  }
+
+  getCheckpoint(pipelineId: string): Checkpoint | undefined {
+    return this.checkpoints.get(pipelineId);
+  }
+
+  clearCheckpoint(pipelineId: string): void {
+    this.checkpoints.delete(pipelineId);
+    this.save();
+  }
+}
+```
+
+### Incremental ETL Pipeline
+
+Combine watermarks and checkpoints into a full incremental pipeline:
+
+```typescript
+interface IncrementalETLConfig {
+  pipelineId: string;
+  watermarkStorePath: string;
+  checkpointStorePath: string;
+}
+
+interface IncrementalETLResult {
+  newRecords: number;
+  processedRecords: number;
+  skippedRecords: number;
+  isFirstRun: boolean;
+  watermark: Watermark;
+}
+
+class IncrementalETLPipeline<TRaw, TFinal> {
+  private transforms: Array<Transform<any, any>> = [];
+  private watermarkStore: WatermarkStore;
+  private checkpointStore: CheckpointStore;
+
+  constructor(
+    private source: IncrementalSource<TRaw>,
+    private target: LoadTarget<TFinal>,
+    private config: IncrementalETLConfig
+  ) {
+    this.watermarkStore = new WatermarkStore(config.watermarkStorePath);
+    this.checkpointStore = new CheckpointStore(config.checkpointStorePath);
+  }
+
+  addTransform(transform: Transform<any, any>): this {
+    this.transforms.push(transform);
+    return this;
+  }
+
+  async run(): Promise<IncrementalETLResult> {
+    // Check for existing watermark
+    const existingWatermark = this.watermarkStore.get(
+      this.config.pipelineId
+    );
+    const isFirstRun = !existingWatermark;
+
+    console.log(
+      isFirstRun
+        ? "First run: processing all records"
+        : `Incremental run: processing records after ${existingWatermark?.field}=${existingWatermark?.value}`
+    );
+
+    // Extract only new records
+    const { records, newWatermark } =
+      await this.source.extractSince(existingWatermark);
+
+    if (records.length === 0) {
+      console.log("No new records to process");
+      return {
+        newRecords: 0,
+        processedRecords: 0,
+        skippedRecords: 0,
+        isFirstRun,
+        watermark: existingWatermark ?? newWatermark,
+      };
+    }
+
+    console.log(`Found ${records.length} new records`);
+
+    // Transform
+    let data: any[] = records;
+    for (const transform of this.transforms) {
+      const before = data.length;
+      data = await transform.execute(data);
+      console.log(`  ${transform.name}: ${before} -> ${data.length}`);
+
+      // Save checkpoint after each transform
+      this.checkpointStore.saveCheckpoint({
+        pipelineId: this.config.pipelineId,
+        stage: transform.name,
+        processedCount: data.length,
+        lastProcessedId: null,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Load
+    await this.target.load(data as TFinal[]);
+
+    // Update watermark only after successful load
+    this.watermarkStore.set(this.config.pipelineId, newWatermark);
+
+    // Clear checkpoint (successful completion)
+    this.checkpointStore.clearCheckpoint(this.config.pipelineId);
+
+    return {
+      newRecords: records.length,
+      processedRecords: data.length,
+      skippedRecords: records.length - data.length,
+      isFirstRun,
+      watermark: newWatermark,
+    };
+  }
+}
+```
+
+### Incremental vs Full Refresh
+
+When should you use each approach?
+
+```typescript
+type RefreshStrategy = "incremental" | "full";
+
+function chooseStrategy(context: {
+  datasetSize: number;
+  changeRate: number;       // Fraction of records that change per run
+  hasReliableTimestamp: boolean;
+  requiresGlobalAggregates: boolean;
+}): RefreshStrategy {
+  // Full refresh when:
+  if (!context.hasReliableTimestamp) return "full";
+  if (context.requiresGlobalAggregates) return "full";
+  if (context.changeRate > 0.5) return "full";
+  if (context.datasetSize < 1000) return "full"; // Small enough, just reprocess
+
+  // Incremental when:
+  // - Large dataset
+  // - Small change rate
+  // - Reliable timestamps
+  // - No need for global recalculation
+  return "incremental";
+}
+```
+
+### Why This Matters for AI Engineering
+
+Incremental processing is critical for AI pipelines because:
+
+1. **Cost**: If each record costs $0.01 to classify with an LLM, reprocessing 100,000 records costs $1,000. Processing only the 500 new records costs $5.
+2. **Speed**: Processing 500 records takes seconds. Processing 100,000 takes hours.
+3. **Rate limits**: LLM APIs have rate limits. Incremental processing stays well within limits.
+4. **Freshness**: Incremental runs can happen more frequently (every 5 minutes instead of once a day), keeping your data more up-to-date.
+
+## Common Mistakes
+
+- **Updating the watermark before the load succeeds.** If the load fails, you have lost track of what needs reprocessing. Always update the watermark after a successful load.
+- **Not handling the first run.** The first run has no watermark, so it should process everything. This is your "backfill" run.
+- **Using an unreliable watermark field.** If records can be updated without changing the timestamp, you will miss updates. Choose a field that reliably increases (auto-increment ID, updated_at timestamp).
+- **Forgetting to handle deletes.** Incremental processing only sees new and updated records. If records are deleted from the source, your incremental pipeline will not know. Plan for periodic full refreshes.
+- **Not persisting watermarks.** If the watermark is only in memory and the process restarts, you lose your progress. Always persist to disk or a database.
+
+## Your Task
+
+Build an incremental ETL pipeline that: reads a CSV source and processes only records newer than the last watermark, persists watermark state to a JSON file, saves checkpoints between transform stages, and supports both incremental and full-refresh modes. Run it twice to verify that the second run only processes new records.

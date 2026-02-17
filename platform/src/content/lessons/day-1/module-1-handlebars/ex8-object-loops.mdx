@@ -1,0 +1,184 @@
+---
+title: "Object Loops"
+description: "Iterating over object key-value pairs with each, using @key, and building tables from objects."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 8
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "each", "objects", "key-value", "iteration"]
+---
+
+## What You'll Learn
+
+You will learn how to use `{{#each}}` to iterate over the key-value pairs of an object, access keys with the `@key` variable, and apply this pattern to build tables and dashboards from structured data.
+
+## Key Concepts
+
+### Iterating Over Objects
+
+In Exercise 7, you used `{{#each}}` with arrays. The same block also works with objects. When you pass an object, Handlebars iterates over its properties. Inside the block, `this` refers to the property value and `@key` refers to the property name:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(`
+{{#each scores}}
+{{@key}}: {{this}}
+{{/each}}
+`);
+
+const result = template({
+  scores: {
+    math: 95,
+    science: 88,
+    english: 92,
+  },
+});
+// "math: 95\nscience: 88\nenglish: 92"
+```
+
+Each iteration gives you one key-value pair from the object. The `@key` variable is the string name of the property; `this` is its value.
+
+### `@key` Is the Object's Property Name
+
+The `@key` variable is unique to object iteration. It does not exist when iterating over arrays (arrays use `@index` instead). Here is a comparison:
+
+```typescript
+// Array iteration: @index is available, @key is not
+const arrayTemplate = Handlebars.compile(`
+{{#each items}}
+Index {{@index}}: {{this}}
+{{/each}}
+`);
+
+// Object iteration: @key is available, @index is also available
+const objectTemplate = Handlebars.compile(`
+{{#each config}}
+Key: {{@key}}, Value: {{this}}, Index: {{@index}}
+{{/each}}
+`);
+
+const result = objectTemplate({
+  config: { host: "localhost", port: "3000", debug: "true" },
+});
+// "Key: host, Value: localhost, Index: 0"
+// "Key: port, Value: 3000, Index: 1"
+// "Key: debug, Value: true, Index: 2"
+```
+
+When iterating over objects, both `@key` and `@index` are available. The `@index` gives you the position in the iteration order (0, 1, 2...), while `@key` gives you the actual property name.
+
+### Objects with Complex Values
+
+Object values can be anything -- strings, numbers, or even nested objects. When the value is an object, you access its properties using dot-notation on `this`:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each models}}
+{{@key}}:
+  Provider: {{this.provider}}
+  Max Tokens: {{this.maxTokens}}
+  Cost per 1K: ${{this.costPer1K}}
+{{/each}}
+`);
+
+const result = template({
+  models: {
+    "gpt-4": { provider: "OpenAI", maxTokens: 8192, costPer1K: 0.03 },
+    "claude-3": { provider: "Anthropic", maxTokens: 200000, costPer1K: 0.015 },
+    "gemini-pro": { provider: "Google", maxTokens: 32000, costPer1K: 0.00025 },
+  },
+});
+```
+
+This pattern is perfect for configuration objects, lookup tables, and any data where the keys carry meaning.
+
+### Building a Key-Value Table
+
+Object iteration is ideal for generating structured displays of configuration data:
+
+```typescript
+const template = Handlebars.compile(`
+Configuration Summary:
+====================
+{{#each settings}}
+| {{@key}} | {{this}} |
+{{else}}
+No settings configured.
+{{/each}}
+====================
+`);
+
+const result = template({
+  settings: {
+    model: "gpt-4",
+    temperature: 0.7,
+    maxTokens: 2048,
+    topP: 1,
+    stream: false,
+  },
+});
+```
+
+### Object Iteration in AI Engineering
+
+When building AI systems, you often need to display or include configuration and metadata in prompts. Object iteration lets you dynamically include all properties without hardcoding each one:
+
+```typescript
+const template = Handlebars.compile(`
+System Configuration:
+{{#each parameters}}
+- {{@key}}: {{this}}
+{{/each}}
+
+Given the above parameters, analyze the following text:
+{{inputText}}
+`);
+
+const prompt = template({
+  parameters: {
+    task: "sentiment-analysis",
+    language: "English",
+    outputFormat: "JSON",
+    confidenceThreshold: 0.8,
+  },
+  inputText: "I absolutely love this product! Best purchase ever.",
+});
+```
+
+This pattern is powerful because adding a new parameter to the object automatically includes it in the prompt -- you do not need to update the template.
+
+### Combining @key with Conditionals
+
+You can use `@key` inside conditional blocks to change behavior based on the property name:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each metrics}}
+{{@key}}: {{this}}{{#if @last}}{{else}}, {{/if}}
+{{/each}}
+`);
+
+const result = template({
+  metrics: {
+    accuracy: "94.5%",
+    precision: "92.1%",
+    recall: "96.8%",
+    f1Score: "94.4%",
+  },
+});
+// "accuracy: 94.5%, precision: 92.1%, recall: 96.8%, f1Score: 94.4%"
+```
+
+## Common Mistakes
+
+- **Confusing `@key` and `@index` when iterating objects.** Both are available during object iteration. `@key` gives you the property name (a string); `@index` gives you the iteration position (a number). Use `@key` when you want to display or reference the property name.
+- **Expecting a specific iteration order.** JavaScript objects maintain insertion order for string keys (in modern engines), but relying on order can be fragile. If order matters, consider using an array of key-value pairs instead.
+- **Forgetting that `this` refers to the value.** Inside object iteration, `this` is the property value. To access the property name, use `@key`. It is easy to mix these up.
+- **Not handling empty objects.** Just like arrays, an empty object `{}` causes `{{#each}}` to render nothing. Use `{{else}}` to provide fallback content.
+
+## Your Task
+
+Create a template that iterates over an object of model configurations, displaying each key-value pair. Use `@key` to show the configuration name and `this` to show the value. Include an `{{else}}` clause for the case when the object is empty.

@@ -1,0 +1,380 @@
+---
+title: "ETL Pipeline"
+description: "Learn to build a full Extract-Transform-Load pipeline with source connectors, transform chains, and load targets."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 16
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["data", "pipelines", "etl", "extract", "transform", "load", "connectors"]
+---
+
+## What You'll Learn
+
+You will learn the ETL (Extract-Transform-Load) pattern, the most fundamental architecture in data engineering. You will build source connectors that extract data from different sources, transform chains that process data through multiple stages, and load targets that write results to different destinations. This is the architecture behind every data pipeline in production.
+
+## Key Concepts
+
+### What Is ETL?
+
+ETL stands for Extract, Transform, Load. It is a three-phase process:
+
+1. **Extract**: Pull raw data from one or more sources (files, APIs, databases)
+2. **Transform**: Clean, validate, enrich, and reshape the data
+3. **Load**: Write the processed data to a destination (file, database, API)
+
+Every data pipeline you have built so far in this module follows this pattern, even if you did not call it ETL. Now you will formalize it into a reusable architecture.
+
+### Source Connectors (Extract)
+
+A source connector knows how to read data from a specific source. Define a common interface so all connectors are interchangeable:
+
+```typescript
+interface SourceConnector<T> {
+  name: string;
+  extract(): Promise<T[]>;
+}
+
+// CSV file source
+class CSVSource<T extends Record<string, string>>
+  implements SourceConnector<T>
+{
+  name: string;
+
+  constructor(
+    private filePath: string,
+    private options: { delimiter?: string } = {}
+  ) {
+    this.name = `csv:${filePath}`;
+  }
+
+  async extract(): Promise<T[]> {
+    const raw = readFileSync(this.filePath, "utf-8");
+    return parse(raw, {
+      columns: true,
+      skip_empty_lines: true,
+      delimiter: this.options.delimiter ?? ",",
+    }) as T[];
+  }
+}
+
+// JSON file source
+class JSONSource<T> implements SourceConnector<T> {
+  name: string;
+
+  constructor(private filePath: string) {
+    this.name = `json:${filePath}`;
+  }
+
+  async extract(): Promise<T[]> {
+    const raw = readFileSync(this.filePath, "utf-8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [data];
+  }
+}
+
+// API source
+class APISource<T> implements SourceConnector<T> {
+  name: string;
+
+  constructor(
+    private url: string,
+    private headers: Record<string, string> = {}
+  ) {
+    this.name = `api:${url}`;
+  }
+
+  async extract(): Promise<T[]> {
+    const response = await fetch(this.url, { headers: this.headers });
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    return Array.isArray(data) ? data : data.results ?? data.data ?? [data];
+  }
+}
+```
+
+### Transform Chain (Transform)
+
+A transform is a function that takes records in and produces records out. Chain them for multi-stage processing:
+
+```typescript
+interface Transform<TInput, TOutput> {
+  name: string;
+  execute(records: TInput[]): Promise<TOutput[]>;
+}
+
+// Validation transform
+class ValidationTransform<T> implements Transform<unknown, T> {
+  name = "validate";
+
+  constructor(private schema: z.ZodSchema<T>) {}
+
+  async execute(records: unknown[]): Promise<T[]> {
+    const valid: T[] = [];
+    for (const record of records) {
+      const result = this.schema.safeParse(record);
+      if (result.success) {
+        valid.push(result.data);
+      }
+    }
+    return valid;
+  }
+}
+
+// Mapping transform
+class MapTransform<TInput, TOutput> implements Transform<TInput, TOutput> {
+  name: string;
+
+  constructor(
+    name: string,
+    private mapFn: (record: TInput) => TOutput
+  ) {
+    this.name = name;
+  }
+
+  async execute(records: TInput[]): Promise<TOutput[]> {
+    return records.map(this.mapFn);
+  }
+}
+
+// Filter transform
+class FilterTransform<T> implements Transform<T, T> {
+  name: string;
+
+  constructor(
+    name: string,
+    private predicate: (record: T) => boolean
+  ) {
+    this.name = name;
+  }
+
+  async execute(records: T[]): Promise<T[]> {
+    return records.filter(this.predicate);
+  }
+}
+
+// Enrichment transform
+class EnrichTransform<T> implements Transform<T, T & Record<string, unknown>> {
+  name: string;
+
+  constructor(
+    name: string,
+    private enrichFn: (record: T) => Promise<T & Record<string, unknown>>
+  ) {
+    this.name = name;
+  }
+
+  async execute(
+    records: T[]
+  ): Promise<Array<T & Record<string, unknown>>> {
+    return Promise.all(records.map(this.enrichFn));
+  }
+}
+```
+
+### Load Targets (Load)
+
+A load target knows how to write processed data to a destination:
+
+```typescript
+interface LoadTarget<T> {
+  name: string;
+  load(records: T[]): Promise<LoadResult>;
+}
+
+interface LoadResult {
+  recordsWritten: number;
+  destination: string;
+}
+
+// File loader
+class FileLoader<T extends Record<string, unknown>>
+  implements LoadTarget<T>
+{
+  name: string;
+
+  constructor(
+    private filePath: string,
+    private format: "json" | "csv"
+  ) {
+    this.name = `file:${filePath}`;
+  }
+
+  async load(records: T[]): Promise<LoadResult> {
+    let content: string;
+    if (this.format === "json") {
+      content = JSON.stringify(records, null, 2);
+    } else {
+      content = exportToCSV(records);
+    }
+
+    writeFileSync(this.filePath, content, "utf-8");
+
+    return {
+      recordsWritten: records.length,
+      destination: this.filePath,
+    };
+  }
+}
+
+// Console loader (for debugging)
+class ConsoleLoader<T> implements LoadTarget<T> {
+  name = "console";
+
+  async load(records: T[]): Promise<LoadResult> {
+    console.log(`\nLoaded ${records.length} records:`);
+    for (const record of records.slice(0, 5)) {
+      console.log(JSON.stringify(record, null, 2));
+    }
+    if (records.length > 5) {
+      console.log(`... and ${records.length - 5} more`);
+    }
+
+    return {
+      recordsWritten: records.length,
+      destination: "console",
+    };
+  }
+}
+
+// Multi-target loader (write to multiple destinations)
+class MultiLoader<T> implements LoadTarget<T> {
+  name: string;
+
+  constructor(private targets: LoadTarget<T>[]) {
+    this.name = `multi:[${targets.map((t) => t.name).join(", ")}]`;
+  }
+
+  async load(records: T[]): Promise<LoadResult> {
+    const results = await Promise.all(
+      this.targets.map((target) => target.load(records))
+    );
+    return {
+      recordsWritten: records.length,
+      destination: results.map((r) => r.destination).join(", "),
+    };
+  }
+}
+```
+
+### The ETL Pipeline Orchestrator
+
+Now bring Extract, Transform, and Load together:
+
+```typescript
+interface ETLResult {
+  extractedCount: number;
+  loadedCount: number;
+  loadResult: LoadResult;
+  metrics: {
+    extractMs: number;
+    transformMs: number;
+    loadMs: number;
+    totalMs: number;
+  };
+}
+
+class ETLPipeline<TRaw, TFinal> {
+  private transforms: Array<Transform<any, any>> = [];
+
+  constructor(
+    private source: SourceConnector<TRaw>,
+    private target: LoadTarget<TFinal>
+  ) {}
+
+  addTransform(transform: Transform<any, any>): this {
+    this.transforms.push(transform);
+    return this;
+  }
+
+  async run(): Promise<ETLResult> {
+    const totalStart = performance.now();
+
+    // Extract
+    const extractStart = performance.now();
+    console.log(`Extracting from ${this.source.name}...`);
+    let data: any[] = await this.source.extract();
+    const extractMs = performance.now() - extractStart;
+    console.log(`  Extracted ${data.length} records`);
+
+    // Transform (apply each transform in sequence)
+    const transformStart = performance.now();
+    for (const transform of this.transforms) {
+      const before = data.length;
+      data = await transform.execute(data);
+      console.log(
+        `  ${transform.name}: ${before} -> ${data.length} records`
+      );
+    }
+    const transformMs = performance.now() - transformStart;
+
+    // Load
+    const loadStart = performance.now();
+    console.log(`Loading to ${this.target.name}...`);
+    const loadResult = await this.target.load(data as TFinal[]);
+    const loadMs = performance.now() - loadStart;
+    console.log(`  Loaded ${loadResult.recordsWritten} records`);
+
+    return {
+      extractedCount: data.length,
+      loadedCount: loadResult.recordsWritten,
+      loadResult,
+      metrics: {
+        extractMs,
+        transformMs,
+        loadMs,
+        totalMs: performance.now() - totalStart,
+      },
+    };
+  }
+}
+```
+
+### Using the ETL Pipeline
+
+```typescript
+const pipeline = new ETLPipeline(
+  new CSVSource("data/raw-sales.csv"),
+  new MultiLoader([
+    new FileLoader("output/clean-sales.json", "json"),
+    new FileLoader("output/clean-sales.csv", "csv"),
+  ])
+)
+  .addTransform(new ValidationTransform(SalesRecordSchema))
+  .addTransform(
+    new FilterTransform("active-only", (r) => r.status === "active")
+  )
+  .addTransform(
+    new MapTransform("compute-totals", (r) => ({
+      ...r,
+      total: r.quantity * r.price,
+    }))
+  );
+
+const result = await pipeline.run();
+console.log(`Pipeline complete:`, result.metrics);
+```
+
+### Why This Matters for AI Engineering
+
+The ETL pattern is the backbone of AI data infrastructure:
+
+1. **Data preparation for fine-tuning**: Extract training data, transform it into the format your model expects, load it into the training pipeline
+2. **RAG pipelines**: Extract documents, transform them into chunks with embeddings, load them into a vector database
+3. **Feature pipelines**: Extract raw events, transform them into features, load them into a feature store for real-time inference
+4. **Reusable components**: Source connectors and transforms are reusable across different pipelines. Build once, use everywhere.
+
+## Common Mistakes
+
+- **Coupling extract and transform.** Keep extraction separate from transformation. Your CSV source should not also clean the data -- that is a transform's job.
+- **Not handling partial failures.** If the load fails after transform succeeds, you lose all your work. Consider checkpointing between stages.
+- **Building monolithic transforms.** Keep transforms small and focused. A single transform that validates, cleans, enriches, and formats is too complex to test or reuse.
+- **Ignoring the load result.** Always check that the number of records loaded matches expectations. A silent failure in the load stage means data loss.
+- **Hardcoding sources and targets.** Use the connector pattern so you can swap CSV for JSON or file for database without changing the pipeline logic.
+
+## Your Task
+
+Build a complete ETL pipeline with: a CSV source connector that extracts records, a chain of transforms (validation, filtering, enrichment), and a multi-target loader that writes to both JSON and CSV files. Return ETL metrics showing timing for each phase.

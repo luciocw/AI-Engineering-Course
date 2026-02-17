@@ -1,0 +1,436 @@
+---
+title: "Capstone: Building a Mini Agent"
+description: "Build an autonomous agent that plans, executes tools, observes results, and iterates toward a goal. Combine everything from Modules 1-3."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 20
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["tools", "function-calling", "agent", "capstone", "autonomous", "planning", "module-1", "module-2", "module-3"]
+---
+
+## What You'll Learn
+
+- The agent loop pattern: Goal, Plan, Execute, Observe, Repeat
+- How an autonomous agent differs from a simple tool-calling assistant
+- Combining prompt templates (M1), cost tracking (M2), and tools (M3)
+- Building an agent that can reason about when to stop
+
+## Key Concepts
+
+### What Is an Agent?
+
+An agent is a system that takes a **goal**, breaks it into steps, executes those steps using tools, observes the results, and adjusts its plan until the goal is achieved (or it decides the goal cannot be achieved).
+
+The difference from a simple tool-calling assistant:
+
+| Simple Tool Assistant | Agent |
+|----------------------|-------|
+| Answers one question at a time | Works toward a multi-step goal |
+| User drives each step | Agent drives its own execution |
+| Stops after one tool call cycle | Keeps going until the goal is met |
+| No planning | Plans before executing |
+| No self-reflection | Observes and adjusts |
+
+### The Agent Loop
+
+```
+┌─────────────────────────────────────────────┐
+│                                             │
+│  1. GOAL: What are we trying to achieve?    │
+│          ↓                                  │
+│  2. PLAN: What steps are needed?            │
+│          ↓                                  │
+│  3. EXECUTE: Run the next tool              │
+│          ↓                                  │
+│  4. OBSERVE: What did we learn?             │
+│          ↓                                  │
+│  5. DECIDE: Are we done? → YES → Return     │
+│          ↓ NO                               │
+│          └──────→ Back to PLAN              │
+│                                             │
+└─────────────────────────────────────────────┘
+```
+
+### The Agent System Prompt
+
+The system prompt is what turns a tool-calling LLM into an agent. It defines the agent's behavior, planning approach, and stopping criteria:
+
+```typescript
+import Handlebars from "handlebars";
+
+// Using Handlebars from Module 1 for the system prompt
+const agentSystemTemplate = Handlebars.compile(`
+You are an autonomous research agent. Your goal is to thoroughly answer the user's question by gathering information from multiple sources.
+
+## Your Approach
+
+1. **Plan**: Before taking action, briefly state what information you need and which tools you'll use.
+2. **Execute**: Call the appropriate tools to gather data.
+3. **Observe**: After each tool result, assess what you've learned and what's still missing.
+4. **Iterate**: If you need more information, plan the next step and continue.
+5. **Conclude**: When you have enough information, provide a comprehensive answer.
+
+## Available Tools
+
+{{#each tools}}
+- **{{name}}**: {{description}}
+{{/each}}
+
+## Rules
+
+- Always plan before acting
+- If a tool fails, try an alternative approach
+- Do not call the same tool with the same arguments twice
+- Stop after gathering enough information to answer confidently
+- If you cannot find the answer after {{maxIterations}} tool calls, provide the best answer you can with what you have
+- Stay within the budget of {{budget}} per request
+
+## Output Format
+
+When you have your final answer, present it clearly with:
+- A direct answer to the question
+- Supporting evidence from your research
+- Any caveats or uncertainties
+`.trim());
+```
+
+### The Agent Class
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+interface AgentConfig {
+  tools: Anthropic.Tool[];
+  toolHandlers: Record<string, (input: Record<string, unknown>) => Promise<string>>;
+  maxIterations: number;
+  budgetDollars: number;
+  model: string;
+}
+
+class Agent {
+  private client = new Anthropic();
+  private config: AgentConfig;
+  private costTracker: CostTracker;
+  private executionLog: {
+    step: number;
+    action: string;
+    tool?: string;
+    input?: unknown;
+    result?: string;
+    reasoning?: string;
+  }[] = [];
+
+  constructor(config: AgentConfig) {
+    this.config = config;
+    this.costTracker = new CostTracker();
+  }
+
+  async run(goal: string): Promise<{
+    answer: string;
+    steps: typeof this.executionLog;
+    cost: ReturnType<CostTracker["getStats"]>;
+  }> {
+    const systemPrompt = agentSystemTemplate({
+      tools: this.config.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+      })),
+      maxIterations: this.config.maxIterations,
+      budget: `$${this.config.budgetDollars.toFixed(2)}`,
+    });
+
+    const messages: Anthropic.MessageParam[] = [
+      { role: "user", content: goal },
+    ];
+
+    let iterations = 0;
+
+    while (iterations < this.config.maxIterations) {
+      iterations++;
+
+      // Check budget
+      if (this.costTracker.getCost().total >= this.config.budgetDollars) {
+        this.executionLog.push({
+          step: iterations,
+          action: "budget_exceeded",
+        });
+        break;
+      }
+
+      // Call the LLM
+      const response = await this.client.messages.create({
+        model: this.config.model,
+        max_tokens: 2048,
+        system: systemPrompt,
+        tools: this.config.tools,
+        messages,
+      });
+
+      this.costTracker.track(response.usage);
+
+      // If no tool use, we have the final answer
+      if (response.stop_reason !== "tool_use") {
+        const textBlock = response.content.find((b) => b.type === "text");
+        const answer = textBlock?.type === "text" ? textBlock.text : "";
+
+        this.executionLog.push({
+          step: iterations,
+          action: "final_answer",
+          reasoning: answer.substring(0, 200),
+        });
+
+        return {
+          answer,
+          steps: this.executionLog,
+          cost: this.costTracker.getStats(),
+        };
+      }
+
+      // Process tool calls
+      messages.push({ role: "assistant", content: response.content });
+
+      // Log the reasoning (text before tool calls)
+      const textParts = response.content
+        .filter((b) => b.type === "text")
+        .map((b) => (b as Anthropic.TextBlock).text)
+        .join("");
+
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+      for (const block of response.content) {
+        if (block.type === "tool_use") {
+          this.executionLog.push({
+            step: iterations,
+            action: "tool_call",
+            tool: block.name,
+            input: block.input,
+            reasoning: textParts.substring(0, 200),
+          });
+
+          try {
+            const handler = this.config.toolHandlers[block.name];
+            const result = handler
+              ? await handler(block.input as Record<string, unknown>)
+              : JSON.stringify({ error: `Unknown tool: ${block.name}` });
+
+            this.executionLog.push({
+              step: iterations,
+              action: "tool_result",
+              tool: block.name,
+              result: result.substring(0, 200),
+            });
+
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: result,
+            });
+          } catch (error) {
+            const errorMsg =
+              error instanceof Error ? error.message : "Unknown error";
+
+            this.executionLog.push({
+              step: iterations,
+              action: "tool_error",
+              tool: block.name,
+              result: errorMsg,
+            });
+
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: JSON.stringify({ error: errorMsg }),
+              is_error: true,
+            });
+          }
+        }
+      }
+
+      messages.push({ role: "user", content: toolResults });
+    }
+
+    // If we exhausted iterations, ask for a final summary
+    messages.push({
+      role: "user",
+      content:
+        "You have reached the maximum number of steps. " +
+        "Please provide your best answer with the information gathered so far.",
+    });
+
+    const finalResponse = await this.client.messages.create({
+      model: this.config.model,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages,
+    });
+
+    this.costTracker.track(finalResponse.usage);
+
+    const finalText = finalResponse.content.find((b) => b.type === "text");
+    const answer = finalText?.type === "text" ? finalText.text : "Unable to complete the task.";
+
+    return {
+      answer,
+      steps: this.executionLog,
+      cost: this.costTracker.getStats(),
+    };
+  }
+}
+```
+
+### Defining Agent Tools
+
+Give the agent a set of tools that cover its domain:
+
+```typescript
+const agentTools: Anthropic.Tool[] = [
+  {
+    name: "search_web",
+    description:
+      "Search the web for information. Returns snippets from relevant pages. " +
+      "Use for current events, facts, and general research.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Search query" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "read_page",
+    description:
+      "Read the full text content of a web page. Use after search_web " +
+      "to get more details from a specific result.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url: { type: "string", description: "URL to read" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "take_notes",
+    description:
+      "Save a note to your scratchpad for later reference. " +
+      "Use to record key findings as you research.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        topic: { type: "string", description: "Note topic/category" },
+        content: { type: "string", description: "Note content" },
+      },
+      required: ["topic", "content"],
+    },
+  },
+  {
+    name: "read_notes",
+    description:
+      "Read all saved notes from your scratchpad. " +
+      "Use before writing your final answer to review what you've found.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+];
+```
+
+### Running the Agent
+
+```typescript
+async function main() {
+  const notes: { topic: string; content: string }[] = [];
+
+  const agent = new Agent({
+    tools: agentTools,
+    toolHandlers: {
+      search_web: async (input) => {
+        // Mock search results
+        return JSON.stringify({
+          results: [
+            { title: "Result 1", snippet: "...", url: "https://example.com/1" },
+            { title: "Result 2", snippet: "...", url: "https://example.com/2" },
+          ],
+        });
+      },
+      read_page: async (input) => {
+        return JSON.stringify({ url: input.url, content: "Page content here..." });
+      },
+      take_notes: async (input) => {
+        notes.push({ topic: input.topic as string, content: input.content as string });
+        return JSON.stringify({ status: "saved", totalNotes: notes.length });
+      },
+      read_notes: async () => {
+        return JSON.stringify({ notes });
+      },
+    },
+    maxIterations: 10,
+    budgetDollars: 0.50,
+    model: "claude-sonnet-4-20250514",
+  });
+
+  console.log("Starting agent...\n");
+
+  const result = await agent.run(
+    "Research the current state of electric vehicle adoption worldwide. " +
+      "I want to know the top 3 countries by EV sales, market trends, " +
+      "and major challenges."
+  );
+
+  console.log("=== Agent Answer ===");
+  console.log(result.answer);
+  console.log("\n=== Execution Log ===");
+  for (const step of result.steps) {
+    console.log(`Step ${step.step}: ${step.action}${step.tool ? ` (${step.tool})` : ""}`);
+  }
+  console.log("\n=== Cost ===");
+  console.log(`Total: $${result.cost.cost.total.toFixed(4)}`);
+  console.log(`API calls: ${result.cost.calls}`);
+}
+```
+
+### Cross-Module Integration Summary
+
+This capstone brings together everything from Day 1:
+
+| Module | Concept | Used Here |
+|--------|---------|-----------|
+| **M1** (Prompt Engineering) | Handlebars templates | System prompt template with dynamic tool list |
+| **M2** (API Mastery) | CostTracker | Budget tracking per request and session |
+| **M3** (Tool Use) | Tool definitions, loop, chaining | The entire agent execution engine |
+
+## Common Mistakes
+
+1. **No stopping condition** -- An agent without clear stopping criteria runs forever. Always set max iterations and a budget.
+
+2. **No observation step** -- If the agent just calls tools without reflecting on results, it may repeat the same actions. The system prompt must encourage reflection.
+
+3. **Too many tools** -- An agent with 20 tools is slow and makes poor choices. Give it 4-6 focused tools.
+
+4. **No error recovery** -- When a tool fails, the agent should try an alternative, not crash. Build resilience into the system prompt.
+
+5. **No execution log** -- Without logging, you cannot debug why the agent took a particular path. Always log every step.
+
+## Your Task
+
+Build a research agent that can answer complex questions by:
+
+1. **Searching** for information (mock 2-3 tools: web search, document search, data lookup)
+2. **Taking notes** to record findings
+3. **Reading notes** to synthesize information before answering
+
+The agent should:
+- Use a Handlebars template for its system prompt (M1)
+- Track costs with CostTracker (M2)
+- Execute tools in a loop with proper error handling (M3)
+- Log every step of its execution
+- Stop when it has enough information OR hits the iteration/budget limit
+
+Test the agent with the goal: "Research the pros and cons of TypeScript vs. JavaScript for large-scale applications and give me a recommendation."
+
+Print the final answer, the execution log (showing the agent's planning and reasoning), and the total cost.

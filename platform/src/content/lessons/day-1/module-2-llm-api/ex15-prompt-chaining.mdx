@@ -1,0 +1,386 @@
+---
+title: "Prompt Chaining: Sequential LLM Calls"
+description: "Learn to build pipelines of sequential LLM calls, where the output of one prompt feeds into the next, with error propagation handling."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 15
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "prompt-chaining", "pipeline", "sequential", "workflow", "error-handling"]
+---
+
+## What You'll Learn
+
+- How to chain multiple LLM calls together
+- The pipeline pattern for multi-step AI workflows
+- How to pass output from one step as input to the next
+- Error propagation and recovery strategies
+- When to chain vs when to do everything in one prompt
+
+## Key Concepts
+
+### What Is Prompt Chaining?
+
+Prompt chaining means using the output of one LLM call as input to the next. Instead of asking a model to do everything at once, you break the task into focused steps, each handled by a specialized prompt.
+
+Why chain? Because LLMs perform better on focused tasks. Asking a model to "analyze this text, extract key themes, translate to Spanish, and format as a newsletter" in one prompt produces mediocre results. Breaking it into 4 focused steps produces excellent results at each stage.
+
+```typescript
+// One giant prompt (fragile, mediocre results):
+// "Analyze, extract themes, translate, and format this text..."
+
+// Chained prompts (reliable, high quality):
+// Step 1: Analyze the text → analysis
+// Step 2: Extract themes from the analysis → themes
+// Step 3: Translate themes to Spanish → translated themes
+// Step 4: Format as newsletter → final output
+```
+
+### Basic Chain Implementation
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// A chain step: takes input, produces output
+interface ChainStep {
+  name: string;
+  prompt: (input: string) => string;
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
+async function executeStep(
+  step: ChainStep,
+  input: string
+): Promise<{ output: string; tokens: { input: number; output: number } }> {
+  const response = await client.messages.create({
+    model: step.model ?? "claude-sonnet-4-20250514",
+    max_tokens: step.maxTokens ?? 1024,
+    temperature: step.temperature ?? 0,
+    messages: [{ role: "user", content: step.prompt(input) }],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  return {
+    output: text,
+    tokens: {
+      input: response.usage.input_tokens,
+      output: response.usage.output_tokens,
+    },
+  };
+}
+
+async function runChain(
+  steps: ChainStep[],
+  initialInput: string
+): Promise<{
+  finalOutput: string;
+  stepResults: Array<{
+    name: string;
+    input: string;
+    output: string;
+    tokens: { input: number; output: number };
+    latencyMs: number;
+  }>;
+}> {
+  let currentInput = initialInput;
+  const stepResults = [];
+
+  for (const step of steps) {
+    console.log(`Running step: ${step.name}...`);
+    const startTime = Date.now();
+
+    const result = await executeStep(step, currentInput);
+
+    stepResults.push({
+      name: step.name,
+      input: currentInput,
+      output: result.output,
+      tokens: result.tokens,
+      latencyMs: Date.now() - startTime,
+    });
+
+    currentInput = result.output; // Output becomes next input
+  }
+
+  return {
+    finalOutput: currentInput,
+    stepResults,
+  };
+}
+```
+
+### Example: Content Processing Pipeline
+
+```typescript
+const contentPipeline: ChainStep[] = [
+  {
+    name: "extract-key-points",
+    prompt: (input) => `Extract the 3-5 most important points from this text.
+List them as concise bullet points.
+
+Text:
+${input}`,
+    model: "claude-sonnet-4-20250514",
+    maxTokens: 512,
+  },
+  {
+    name: "generate-summary",
+    prompt: (keyPoints) => `Based on these key points, write a professional
+2-paragraph summary suitable for an executive audience:
+
+${keyPoints}`,
+    maxTokens: 512,
+  },
+  {
+    name: "create-action-items",
+    prompt: (summary) => `Based on this summary, generate a list of action items.
+Each should have an owner role (e.g., "Engineering Lead"), a task, and a priority (high/medium/low).
+
+Format as JSON array: [{"owner": "...", "task": "...", "priority": "..."}]
+
+Summary:
+${summary}`,
+    maxTokens: 512,
+    temperature: 0,
+  },
+];
+
+// Run the pipeline
+const result = await runChain(contentPipeline, longArticleText);
+console.log("Action items:", result.finalOutput);
+```
+
+### Error Propagation and Recovery
+
+In a chain, one failed step can poison all subsequent steps. Handle this explicitly:
+
+```typescript
+interface ChainStepWithRecovery extends ChainStep {
+  validate?: (output: string) => boolean;
+  onError?: (error: Error, input: string) => string; // Fallback output
+  retries?: number;
+}
+
+async function runRobustChain(
+  steps: ChainStepWithRecovery[],
+  initialInput: string
+): Promise<{
+  finalOutput: string;
+  success: boolean;
+  failedStep?: string;
+  stepResults: Array<{
+    name: string;
+    output: string;
+    success: boolean;
+    attempts: number;
+  }>;
+}> {
+  let currentInput = initialInput;
+  const stepResults = [];
+
+  for (const step of steps) {
+    const maxAttempts = (step.retries ?? 0) + 1;
+    let success = false;
+    let output = "";
+    let attempts = 0;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      attempts++;
+      try {
+        const result = await executeStep(step, currentInput);
+        output = result.output;
+
+        // Validate if validator provided
+        if (step.validate && !step.validate(output)) {
+          throw new Error(`Validation failed for step "${step.name}"`);
+        }
+
+        success = true;
+        break;
+      } catch (error) {
+        console.error(
+          `Step "${step.name}" attempt ${attempt + 1} failed:`,
+          error
+        );
+
+        if (attempt === maxAttempts - 1) {
+          // Last attempt failed
+          if (step.onError) {
+            output = step.onError(error as Error, currentInput);
+            success = true; // Recovered with fallback
+          } else {
+            stepResults.push({ name: step.name, output: "", success: false, attempts });
+            return {
+              finalOutput: "",
+              success: false,
+              failedStep: step.name,
+              stepResults,
+            };
+          }
+        }
+      }
+    }
+
+    stepResults.push({ name: step.name, output, success, attempts });
+    currentInput = output;
+  }
+
+  return { finalOutput: currentInput, success: true, stepResults };
+}
+```
+
+### Chain with Different Models
+
+Use the right model for each step to optimize cost:
+
+```typescript
+const optimizedPipeline: ChainStep[] = [
+  {
+    name: "classify",
+    prompt: (input) =>
+      `Classify this text as: technical, business, or personal. Respond with only the category.\n\n${input}`,
+    model: "claude-haiku-3-5", // Cheap model for simple classification
+    maxTokens: 10,
+  },
+  {
+    name: "analyze",
+    prompt: (input) =>
+      // Input is now the classification + original text (you'd need to modify the chain to pass both)
+      `Provide a detailed analysis of this text:\n\n${input}`,
+    model: "claude-sonnet-4-20250514", // Medium model for analysis
+    maxTokens: 1024,
+  },
+  {
+    name: "recommend",
+    prompt: (analysis) =>
+      `Based on this analysis, provide 3 strategic recommendations:\n\n${analysis}`,
+    model: "claude-sonnet-4-20250514",
+    maxTokens: 512,
+  },
+];
+```
+
+### Passing Context Between Steps
+
+Sometimes later steps need access to earlier outputs, not just the immediately previous one:
+
+```typescript
+interface ChainContext {
+  [key: string]: string;
+}
+
+interface ContextAwareStep {
+  name: string;
+  prompt: (context: ChainContext) => string;
+  outputKey: string; // Key to store this step's output in context
+  model?: string;
+  maxTokens?: number;
+}
+
+async function runContextChain(
+  steps: ContextAwareStep[],
+  initialContext: ChainContext
+): Promise<ChainContext> {
+  const context = { ...initialContext };
+
+  for (const step of steps) {
+    console.log(`Running: ${step.name}`);
+
+    const response = await client.messages.create({
+      model: step.model ?? "claude-sonnet-4-20250514",
+      max_tokens: step.maxTokens ?? 1024,
+      temperature: 0,
+      messages: [{ role: "user", content: step.prompt(context) }],
+    });
+
+    const text =
+      response.content[0].type === "text" ? response.content[0].text : "";
+    context[step.outputKey] = text;
+  }
+
+  return context;
+}
+
+// Usage: later steps can reference any earlier step's output
+const steps: ContextAwareStep[] = [
+  {
+    name: "extract-entities",
+    outputKey: "entities",
+    prompt: (ctx) =>
+      `Extract all person names and companies from this text:\n${ctx.originalText}`,
+  },
+  {
+    name: "summarize",
+    outputKey: "summary",
+    prompt: (ctx) =>
+      `Summarize this text in 2 sentences:\n${ctx.originalText}`,
+  },
+  {
+    name: "generate-report",
+    outputKey: "report",
+    prompt: (ctx) =>
+      `Create a brief report using these inputs:
+Entities found: ${ctx.entities}
+Summary: ${ctx.summary}
+Original text: ${ctx.originalText}`,
+  },
+];
+
+const result = await runContextChain(steps, {
+  originalText: "The meeting between CEO Sarah Chen and Google's CTO...",
+});
+```
+
+### When to Chain vs Single Prompt
+
+```typescript
+// Chain when:
+// - The task has distinct logical phases
+// - Different steps benefit from different models
+// - You need to validate intermediate results
+// - The combined prompt would be too long or complex
+// - You want to reuse individual steps in other pipelines
+
+// Single prompt when:
+// - The task is straightforward
+// - All parts are tightly coupled
+// - Latency is critical (chains multiply latency)
+// - The cost of multiple calls exceeds the quality benefit
+```
+
+## Common Mistakes
+
+1. **No validation between steps**: If step 1 produces garbage, step 2 amplifies the garbage. Validate each step's output before passing it forward.
+
+2. **Losing context in the chain**: If step 3 needs information from step 1 but only receives step 2's output, use a context object instead of simple sequential passing.
+
+3. **All steps using the same model**: Use cheap models for simple steps (classification, extraction) and powerful models for complex steps (analysis, generation). This dramatically reduces cost.
+
+4. **No error recovery**: If step 2 of 5 fails, what happens? Without fallbacks or retries, the entire chain fails. Design for partial failure.
+
+5. **Chains that are too long**: Each step adds latency and a chance of failure. If your chain has more than 5-6 steps, consider whether some steps can be merged or parallelized.
+
+## Your Task
+
+Build a prompt chaining system that:
+
+1. Implements the `runChain` function for sequential step execution
+2. Implements `runContextChain` where steps can access all previous outputs
+3. Adds error handling with retries and fallbacks
+4. Builds a 3-4 step pipeline for one of these use cases:
+   - **Blog post generator**: Topic -> Outline -> Draft -> Polish
+   - **Code reviewer**: Code -> Identify Issues -> Suggest Fixes -> Generate Report
+   - **Customer email processor**: Email -> Classify -> Extract Info -> Generate Response
+5. Logs each step's output, latency, and token usage
+6. Uses different models for different steps based on complexity
+
+Run the pipeline with at least 2 different inputs and show the intermediate results at each step.
+
+Bonus: Implement parallel execution for steps that do not depend on each other (e.g., "extract entities" and "summarize" can run simultaneously).

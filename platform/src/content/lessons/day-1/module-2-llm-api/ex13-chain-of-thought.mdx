@@ -1,0 +1,379 @@
+---
+title: "Chain of Thought: Step-by-Step Reasoning"
+description: "Learn step-by-step reasoning prompts, the 'think step by step' technique, extracting answers from reasoning, and when CoT beats direct prompting."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 13
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "chain-of-thought", "reasoning", "cot", "prompt-engineering", "step-by-step"]
+---
+
+## What You'll Learn
+
+- What chain-of-thought (CoT) prompting is and why it works
+- How to implement CoT in your prompts
+- Extracting the final answer from reasoning traces
+- When CoT improves results and when it adds unnecessary cost
+- Comparing CoT with direct prompting
+
+## Key Concepts
+
+### What Is Chain of Thought?
+
+Chain of thought prompting asks the model to show its reasoning before giving a final answer. Instead of jumping straight to a conclusion, the model works through the problem step by step.
+
+This is similar to how humans solve problems: you think through the steps before announcing the answer. The key insight is that making the model "think out loud" dramatically improves accuracy on complex tasks.
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// Direct prompting: "Just give me the answer"
+async function directAnswer(question: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 100,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `${question}\n\nAnswer with just the final answer, nothing else.`,
+      },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text.trim() : "";
+}
+
+// Chain of thought: "Show your work"
+async function chainOfThought(question: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `${question}\n\nLet's think through this step by step before giving the final answer.`,
+      },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text.trim() : "";
+}
+```
+
+### Why CoT Works
+
+Consider this problem: "A store has 3 boxes. Each box has 4 bags. Each bag has 5 marbles. How many marbles total?"
+
+**Direct prompting** might output: "60 marbles" (correct, but fragile on harder problems)
+
+**Chain of thought** outputs:
+1. "First, let's count bags: 3 boxes x 4 bags = 12 bags"
+2. "Then, let's count marbles: 12 bags x 5 marbles = 60 marbles"
+3. "Final answer: 60 marbles"
+
+The reasoning trace acts as "working memory" for the model. Each step builds on the previous one, reducing the chance of errors on multi-step problems.
+
+### Implementing CoT Effectively
+
+**Technique 1: The Magic Phrase**
+
+Simply adding "Let's think step by step" to your prompt triggers chain-of-thought reasoning:
+
+```typescript
+async function simpleCot(question: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `${question}
+
+Let's think step by step.`,
+      },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text : "";
+}
+```
+
+**Technique 2: Structured CoT with XML Tags**
+
+For more control over the reasoning process:
+
+```typescript
+async function structuredCot(question: string): Promise<{
+  reasoning: string;
+  answer: string;
+}> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `${question}
+
+Think through this step by step. Structure your response as:
+
+<reasoning>
+[Your step-by-step reasoning here]
+</reasoning>
+
+<answer>
+[Your final answer here]
+</answer>`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  const reasoningMatch = text.match(/<reasoning>([\s\S]*?)<\/reasoning>/);
+  const answerMatch = text.match(/<answer>([\s\S]*?)<\/answer>/);
+
+  return {
+    reasoning: reasoningMatch ? reasoningMatch[1].trim() : "",
+    answer: answerMatch ? answerMatch[1].trim() : text.trim(),
+  };
+}
+```
+
+**Technique 3: Few-Shot CoT**
+
+Provide examples that include the reasoning process:
+
+```typescript
+async function fewShotCot(question: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Solve these problems step by step.
+
+Q: Roger has 5 tennis balls. He buys 2 more cans of 3. How many does he have now?
+A: Let's think step by step.
+1. Roger starts with 5 balls.
+2. He buys 2 cans of 3 balls each: 2 × 3 = 6 balls.
+3. Total: 5 + 6 = 11 balls.
+Final answer: 11
+
+Q: A store sells apples for $2 each and oranges for $3 each. If I buy 4 apples and 3 oranges, and I have a $5 coupon, how much do I pay?
+A: Let's think step by step.
+1. Cost of apples: 4 × $2 = $8
+2. Cost of oranges: 3 × $3 = $9
+3. Total before coupon: $8 + $9 = $17
+4. After $5 coupon: $17 - $5 = $12
+Final answer: $12
+
+Q: ${question}
+A: Let's think step by step.`,
+      },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text : "";
+}
+```
+
+### Extracting the Final Answer
+
+CoT produces reasoning AND an answer. You need to extract just the answer for downstream use:
+
+```typescript
+function extractFinalAnswer(cotResponse: string): string {
+  // Strategy 1: Look for "Final answer:" pattern
+  const finalAnswerMatch = cotResponse.match(
+    /(?:final answer|answer)[:\s]*(.+?)(?:\n|$)/i
+  );
+  if (finalAnswerMatch) {
+    return finalAnswerMatch[1].trim();
+  }
+
+  // Strategy 2: Look for XML answer tags
+  const xmlMatch = cotResponse.match(/<answer>([\s\S]*?)<\/answer>/);
+  if (xmlMatch) {
+    return xmlMatch[1].trim();
+  }
+
+  // Strategy 3: Take the last line as the answer
+  const lines = cotResponse.trim().split("\n").filter(Boolean);
+  return lines[lines.length - 1].trim();
+}
+
+// Two-step extraction for maximum reliability
+async function cotWithExtraction(question: string): Promise<string> {
+  // Step 1: Get the reasoning
+  const reasoning = await chainOfThought(question);
+
+  // Step 2: Try to extract programmatically
+  const extracted = extractFinalAnswer(reasoning);
+
+  // If extraction looks clean, return it
+  if (extracted.length < 100) {
+    return extracted;
+  }
+
+  // Step 3: If unclear, ask the model to extract
+  const extractResponse = await client.messages.create({
+    model: "claude-haiku-3-5", // Cheap model for extraction
+    max_tokens: 50,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `From this reasoning, extract ONLY the final answer in 1-2 words or a number:
+
+${reasoning}
+
+Final answer:`,
+      },
+    ],
+  });
+
+  return extractResponse.content[0].type === "text"
+    ? extractResponse.content[0].text.trim()
+    : "";
+}
+```
+
+### When to Use CoT vs Direct Prompting
+
+```typescript
+interface TaskConfig {
+  useCoT: boolean;
+  reason: string;
+}
+
+function shouldUseCoT(task: {
+  type: string;
+  complexity: string;
+  requiresReasoning: boolean;
+}): TaskConfig {
+  // CoT HELPS with:
+  // - Math and logic problems
+  // - Multi-step reasoning
+  // - Complex classification with subtle distinctions
+  // - Tasks where showing work improves accuracy
+
+  // CoT HURTS or is UNNECESSARY for:
+  // - Simple classification (positive/negative)
+  // - Data extraction (pull out the email address)
+  // - Translation or reformatting
+  // - When you need fast, concise responses
+
+  if (task.type === "classification" && task.complexity === "simple") {
+    return { useCoT: false, reason: "Simple classification doesn't benefit from CoT" };
+  }
+
+  if (task.type === "extraction") {
+    return { useCoT: false, reason: "Extraction is pattern matching, not reasoning" };
+  }
+
+  if (task.requiresReasoning || task.complexity === "complex") {
+    return { useCoT: true, reason: "Complex reasoning benefits from step-by-step thinking" };
+  }
+
+  return { useCoT: false, reason: "Default to direct prompting for simplicity and speed" };
+}
+```
+
+### Benchmarking CoT vs Direct
+
+```typescript
+interface CotBenchmarkResult {
+  question: string;
+  directAnswer: string;
+  cotAnswer: string;
+  directCorrect: boolean;
+  cotCorrect: boolean;
+  directLatencyMs: number;
+  cotLatencyMs: number;
+  directTokens: number;
+  cotTokens: number;
+}
+
+async function benchmarkCot(
+  testCases: Array<{ question: string; expected: string }>
+): Promise<CotBenchmarkResult[]> {
+  const results: CotBenchmarkResult[] = [];
+
+  for (const test of testCases) {
+    // Direct approach
+    const directStart = Date.now();
+    const direct = await directAnswer(test.question);
+    const directLatency = Date.now() - directStart;
+
+    // CoT approach
+    const cotStart = Date.now();
+    const cot = await cotWithExtraction(test.question);
+    const cotLatency = Date.now() - cotStart;
+
+    results.push({
+      question: test.question,
+      directAnswer: direct,
+      cotAnswer: cot,
+      directCorrect: direct.toLowerCase().includes(test.expected.toLowerCase()),
+      cotCorrect: cot.toLowerCase().includes(test.expected.toLowerCase()),
+      directLatencyMs: directLatency,
+      cotLatencyMs: cotLatency,
+      directTokens: 0, // Track from response if needed
+      cotTokens: 0,
+    });
+  }
+
+  // Summary
+  const directAccuracy =
+    results.filter((r) => r.directCorrect).length / results.length;
+  const cotAccuracy =
+    results.filter((r) => r.cotCorrect).length / results.length;
+  const avgDirectLatency =
+    results.reduce((s, r) => s + r.directLatencyMs, 0) / results.length;
+  const avgCotLatency =
+    results.reduce((s, r) => s + r.cotLatencyMs, 0) / results.length;
+
+  console.log(`Direct: ${(directAccuracy * 100).toFixed(1)}% accuracy, ${avgDirectLatency.toFixed(0)}ms avg`);
+  console.log(`CoT: ${(cotAccuracy * 100).toFixed(1)}% accuracy, ${avgCotLatency.toFixed(0)}ms avg`);
+
+  return results;
+}
+```
+
+## Common Mistakes
+
+1. **Using CoT for everything**: CoT adds latency and cost. For simple tasks like "Is this email spam?", direct prompting is faster, cheaper, and equally accurate. Reserve CoT for tasks that actually require reasoning.
+
+2. **Not extracting the final answer**: If you pass the full CoT output downstream, you are passing reasoning text along with the answer. Always extract just the answer for programmatic use.
+
+3. **Letting reasoning go unbounded**: Without a max_tokens limit, CoT responses can become extremely long. Set reasonable limits and use structured output (XML tags) to keep reasoning focused.
+
+4. **Ignoring the reasoning trace**: The reasoning is valuable for debugging. When a CoT answer is wrong, reading the reasoning tells you *why* it went wrong -- maybe the model misunderstood the problem or made a logic error in step 3. Log the reasoning for debugging purposes.
+
+5. **Not using few-shot CoT for domain-specific tasks**: The generic "think step by step" works for general reasoning. For domain-specific tasks (medical diagnosis, legal analysis, financial calculations), provide examples that show the specific reasoning patterns you expect.
+
+## Your Task
+
+Build a chain-of-thought reasoning system that:
+
+1. Implements three prompting approaches: direct, simple CoT ("think step by step"), and structured CoT (with XML tags)
+2. Creates a robust answer extraction function that handles multiple formats
+3. Tests all three approaches on at least 5 reasoning-heavy questions (math, logic, multi-step problems)
+4. Tests all three approaches on at least 3 simple tasks (classification, extraction) to show when CoT is unnecessary
+5. Produces a comparison table with accuracy, latency, and token usage for each approach and task type
+
+The output should clearly show that CoT improves accuracy on complex reasoning but adds unnecessary overhead on simple tasks.
+
+Bonus: Implement a "selective CoT" system that automatically decides whether to use CoT based on input complexity, and show that it achieves the best accuracy-to-cost ratio.

@@ -1,0 +1,295 @@
+---
+title: "AI Classification"
+description: "Learn to use an LLM API to classify data records, batch requests for efficiency, cache results, and build cost-effective AI processing pipelines."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 12
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "ai", "classification", "llm", "batching", "caching", "cross-module"]
+---
+
+## What You'll Learn
+
+You will learn how to integrate LLM API calls (from Module 2) into a data pipeline to classify records automatically. You will batch requests for efficiency, cache results to avoid redundant API calls, and design cost-effective processing strategies. This is a key cross-module exercise combining data pipelines with LLM APIs.
+
+## Key Concepts
+
+### Why AI Classification?
+
+Some data processing tasks are too nuanced for rules. Classifying customer feedback as positive/negative/neutral, categorizing support tickets by department, or tagging products by theme -- these tasks require understanding natural language. LLMs excel at this.
+
+But calling an LLM for every single record in a 10,000-row dataset is expensive and slow. You need strategies to make it practical.
+
+### Basic Single-Record Classification
+
+Start with the simplest approach -- classifying one record at a time:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+interface ClassificationResult {
+  category: string;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+}
+
+async function classifyRecord(
+  text: string,
+  categories: string[]
+): Promise<ClassificationResult> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 200,
+    messages: [
+      {
+        role: "user",
+        content: `Classify the following text into one of these categories: ${categories.join(", ")}.
+
+Text: "${text}"
+
+Respond in JSON format:
+{
+  "category": "chosen category",
+  "confidence": "high|medium|low",
+  "reasoning": "brief explanation"
+}`,
+      },
+    ],
+  });
+
+  const content = response.content[0];
+  if (content.type !== "text") {
+    throw new Error("Unexpected response type");
+  }
+
+  return JSON.parse(content.text);
+}
+```
+
+This works but is slow (one API call per record) and expensive. Let us improve it.
+
+### Batch Classification
+
+Instead of one record per API call, send multiple records in a single prompt:
+
+```typescript
+async function classifyBatch(
+  records: Array<{ id: string; text: string }>,
+  categories: string[]
+): Promise<Map<string, ClassificationResult>> {
+  // Format multiple records into one prompt
+  const recordList = records
+    .map((r, i) => `${i + 1}. [ID: ${r.id}] "${r.text}"`)
+    .join("\n");
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1000,
+    messages: [
+      {
+        role: "user",
+        content: `Classify each of the following texts into one of these categories: ${categories.join(", ")}.
+
+${recordList}
+
+Respond as a JSON array with one object per text:
+[
+  { "id": "record id", "category": "chosen category", "confidence": "high|medium|low", "reasoning": "brief explanation" }
+]`,
+      },
+    ],
+  });
+
+  const content = response.content[0];
+  if (content.type !== "text") {
+    throw new Error("Unexpected response type");
+  }
+
+  const results: Array<{ id: string } & ClassificationResult> = JSON.parse(
+    content.text
+  );
+
+  const resultMap = new Map<string, ClassificationResult>();
+  for (const result of results) {
+    resultMap.set(result.id, {
+      category: result.category,
+      confidence: result.confidence,
+      reasoning: result.reasoning,
+    });
+  }
+
+  return resultMap;
+}
+```
+
+Batching reduces API calls by 10-50x. The tradeoff is that very large batches may decrease classification accuracy, so a batch size of 10-20 is usually optimal.
+
+### Caching Results
+
+If the same text appears multiple times (or you re-run the pipeline), caching avoids redundant API calls:
+
+```typescript
+class ClassificationCache {
+  private cache: Map<string, ClassificationResult>;
+
+  constructor() {
+    this.cache = new Map();
+  }
+
+  private makeKey(text: string, categories: string[]): string {
+    // Create a deterministic key from the input
+    const normalized = text.trim().toLowerCase();
+    const catKey = categories.sort().join("|");
+    return `${catKey}::${normalized}`;
+  }
+
+  get(text: string, categories: string[]): ClassificationResult | undefined {
+    return this.cache.get(this.makeKey(text, categories));
+  }
+
+  set(
+    text: string,
+    categories: string[],
+    result: ClassificationResult
+  ): void {
+    this.cache.set(this.makeKey(text, categories), result);
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+
+  // Save cache to disk for persistence across runs
+  saveToDisk(filePath: string): void {
+    const entries = Array.from(this.cache.entries());
+    writeFileSync(filePath, JSON.stringify(entries), "utf-8");
+  }
+
+  // Load cache from disk
+  loadFromDisk(filePath: string): void {
+    try {
+      const data = readFileSync(filePath, "utf-8");
+      const entries: [string, ClassificationResult][] = JSON.parse(data);
+      this.cache = new Map(entries);
+    } catch {
+      // File does not exist, start with empty cache
+    }
+  }
+}
+```
+
+### Cost-Effective Processing Pipeline
+
+Combine batching, caching, and smart chunking into a complete pipeline:
+
+```typescript
+interface PipelineConfig {
+  batchSize: number;       // Records per API call
+  maxConcurrent: number;   // Parallel API calls
+  categories: string[];
+  cachePath?: string;
+}
+
+interface PipelineResult {
+  classified: Array<{ id: string; text: string } & ClassificationResult>;
+  stats: {
+    totalRecords: number;
+    cacheHits: number;
+    apiCalls: number;
+    estimatedCost: number;
+  };
+}
+
+async function classificationPipeline(
+  records: Array<{ id: string; text: string }>,
+  config: PipelineConfig
+): Promise<PipelineResult> {
+  const cache = new ClassificationCache();
+  if (config.cachePath) {
+    cache.loadFromDisk(config.cachePath);
+  }
+
+  const classified: Array<{ id: string; text: string } & ClassificationResult> = [];
+  const needsClassification: Array<{ id: string; text: string }> = [];
+
+  // Step 1: Check cache first
+  for (const record of records) {
+    const cached = cache.get(record.text, config.categories);
+    if (cached) {
+      classified.push({ ...record, ...cached });
+    } else {
+      needsClassification.push(record);
+    }
+  }
+
+  const cacheHits = classified.length;
+
+  // Step 2: Batch the remaining records
+  const batches: Array<Array<{ id: string; text: string }>> = [];
+  for (let i = 0; i < needsClassification.length; i += config.batchSize) {
+    batches.push(needsClassification.slice(i, i + config.batchSize));
+  }
+
+  // Step 3: Process batches
+  let apiCalls = 0;
+  for (const batch of batches) {
+    const results = await classifyBatch(batch, config.categories);
+    apiCalls++;
+
+    for (const record of batch) {
+      const result = results.get(record.id);
+      if (result) {
+        classified.push({ ...record, ...result });
+        cache.set(record.text, config.categories, result);
+      }
+    }
+  }
+
+  // Step 4: Save cache
+  if (config.cachePath) {
+    cache.saveToDisk(config.cachePath);
+  }
+
+  // Estimate cost (rough: ~$0.003 per 1K input tokens for Claude Sonnet)
+  const avgTokensPerBatch = config.batchSize * 50; // ~50 tokens per record
+  const estimatedCost = apiCalls * (avgTokensPerBatch / 1000) * 0.003;
+
+  return {
+    classified,
+    stats: {
+      totalRecords: records.length,
+      cacheHits,
+      apiCalls,
+      estimatedCost,
+    },
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+AI classification in data pipelines is one of the most practical applications of LLMs:
+
+1. **Automated triage**: Classify incoming support tickets, bug reports, or customer feedback without human reviewers
+2. **Content moderation**: Flag potentially harmful content in user-generated data
+3. **Data labeling**: Label training data for downstream ML models
+4. **Analytics enrichment**: Add semantic categories to raw data for richer analysis
+
+The key is doing it cost-effectively. A naive approach costs 100x more than a well-designed pipeline with batching and caching.
+
+## Common Mistakes
+
+- **Not batching requests.** Sending one API call per record is the most common and most expensive mistake. Always batch.
+- **Making batches too large.** If you put 100 records in one prompt, the LLM may lose track or make mistakes. Keep batches between 5-20 records.
+- **Not caching.** If you re-run your pipeline during development, you will re-classify the same records hundreds of times. Always cache.
+- **Ignoring rate limits.** LLM APIs have rate limits. Add delays between batches or use a semaphore to limit concurrent requests.
+- **Not validating LLM output.** The LLM might return invalid JSON or unexpected categories. Always parse and validate the response with a try/catch and fallback logic.
+- **Forgetting cost estimation.** Track API calls and estimate costs. It is easy to accidentally spend hundreds of dollars on a large dataset.
+
+## Your Task
+
+Build an AI classification pipeline that takes an array of text records, classifies them using an LLM API call with batching (10 records per batch), caches results to avoid re-classifying duplicates, and returns the classified records along with cost and performance statistics.

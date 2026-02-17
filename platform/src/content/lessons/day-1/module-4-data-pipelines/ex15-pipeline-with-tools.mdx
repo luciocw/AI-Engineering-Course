@@ -1,0 +1,342 @@
+---
+title: "Pipeline with Tools"
+description: "Learn to use LLM tool calling from Module 3 for data enrichment, build tool-powered ETL steps, and integrate tools into data pipelines."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 15
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["data", "pipelines", "tools", "llm", "enrichment", "etl", "cross-module"]
+---
+
+## What You'll Learn
+
+You will learn how to use LLM tool calling (from Module 3) as a step in your data pipeline. Instead of just classifying text, the LLM can call tools to look up data, validate records, or transform information -- making your pipeline dramatically more capable. This is a key cross-module exercise combining Modules 2, 3, and 4.
+
+## Key Concepts
+
+### Why Tools in Pipelines?
+
+In Exercise 12, you used an LLM to classify text. But classification is just one thing an LLM can do. With tool calling, the LLM can:
+
+- Look up a company's current stock price to enrich a financial record
+- Query a geocoding API to add coordinates to an address
+- Validate that a product ID exists in your database
+- Convert currencies using live exchange rates
+
+The LLM decides which tool to call based on the data it sees. This is like giving your pipeline a smart decision-maker that can reach out to external systems.
+
+### Defining Tools for Data Enrichment
+
+Recall from Module 3 that tools are defined as JSON schemas. Here are tools designed for data enrichment:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const enrichmentTools: Anthropic.Messages.Tool[] = [
+  {
+    name: "lookup_company",
+    description:
+      "Look up company information by name. Returns industry, size, and headquarters location.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        company_name: {
+          type: "string",
+          description: "The company name to look up",
+        },
+      },
+      required: ["company_name"],
+    },
+  },
+  {
+    name: "geocode_address",
+    description:
+      "Convert a street address to latitude/longitude coordinates.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        address: {
+          type: "string",
+          description: "The full street address to geocode",
+        },
+      },
+      required: ["address"],
+    },
+  },
+  {
+    name: "categorize_product",
+    description:
+      "Look up a product's category hierarchy from the product catalog.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        product_name: {
+          type: "string",
+          description: "The product name to categorize",
+        },
+      },
+      required: ["product_name"],
+    },
+  },
+];
+```
+
+### Implementing Tool Handlers
+
+Each tool needs a handler that performs the actual lookup:
+
+```typescript
+type ToolHandler = (input: Record<string, unknown>) => Promise<string>;
+
+const toolHandlers: Record<string, ToolHandler> = {
+  async lookup_company(input) {
+    const name = input.company_name as string;
+    // In production, this would call a real API or database
+    const companies: Record<
+      string,
+      { industry: string; size: string; hq: string }
+    > = {
+      acme: { industry: "Manufacturing", size: "Large", hq: "Chicago, IL" },
+      globex: { industry: "Technology", size: "Medium", hq: "Austin, TX" },
+    };
+    const data = companies[name.toLowerCase()];
+    return data
+      ? JSON.stringify(data)
+      : JSON.stringify({ error: "Company not found" });
+  },
+
+  async geocode_address(input) {
+    const address = input.address as string;
+    // Simulated geocoding
+    return JSON.stringify({
+      lat: 40.7128,
+      lng: -74.006,
+      formatted: address,
+    });
+  },
+
+  async categorize_product(input) {
+    const name = input.product_name as string;
+    return JSON.stringify({
+      category: "Electronics",
+      subcategory: "Components",
+      tags: ["hardware", "industrial"],
+    });
+  },
+};
+```
+
+### Tool-Powered Enrichment Step
+
+Now combine the LLM, tools, and pipeline into an enrichment step:
+
+```typescript
+const client = new Anthropic();
+
+async function enrichWithTools(
+  record: Record<string, unknown>,
+  tools: Anthropic.Messages.Tool[],
+  handlers: Record<string, ToolHandler>
+): Promise<Record<string, unknown>> {
+  // Ask the LLM to enrich the record using available tools
+  let messages: Anthropic.Messages.MessageParam[] = [
+    {
+      role: "user",
+      content: `You have a data record that needs enrichment. Use the available tools to add as much relevant information as possible.
+
+Record: ${JSON.stringify(record)}
+
+Call the appropriate tools to enrich this record, then return the enriched version as JSON.`,
+    },
+  ];
+
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools,
+    messages,
+  });
+
+  // Handle the tool use loop
+  while (response.stop_reason === "tool_use") {
+    const toolUseBlocks = response.content.filter(
+      (block): block is Anthropic.Messages.ToolUseBlock =>
+        block.type === "tool_use"
+    );
+
+    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+
+    for (const toolUse of toolUseBlocks) {
+      const handler = handlers[toolUse.name];
+      if (!handler) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({ error: `Unknown tool: ${toolUse.name}` }),
+        });
+        continue;
+      }
+
+      try {
+        const result = await handler(toolUse.input as Record<string, unknown>);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: result,
+        });
+      } catch (error) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: JSON.stringify({
+            error: error instanceof Error ? error.message : "Tool execution failed",
+          }),
+        });
+      }
+    }
+
+    messages = [
+      ...messages,
+      { role: "assistant", content: response.content },
+      { role: "user", content: toolResults },
+    ];
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools,
+      messages,
+    });
+  }
+
+  // Extract the final text response
+  const textBlock = response.content.find(
+    (block): block is Anthropic.Messages.TextBlock => block.type === "text"
+  );
+
+  if (!textBlock) {
+    return record; // Return original if no enrichment
+  }
+
+  try {
+    return JSON.parse(textBlock.text);
+  } catch {
+    return { ...record, _enrichmentNote: textBlock.text };
+  }
+}
+```
+
+### Batch Processing with Tools
+
+Process multiple records efficiently by controlling concurrency:
+
+```typescript
+async function batchEnrichWithTools(
+  records: Array<Record<string, unknown>>,
+  tools: Anthropic.Messages.Tool[],
+  handlers: Record<string, ToolHandler>,
+  options: { concurrency?: number; batchDelay?: number } = {}
+): Promise<{
+  enriched: Array<Record<string, unknown>>;
+  stats: { succeeded: number; failed: number; toolCalls: number };
+}> {
+  const { concurrency = 3, batchDelay = 500 } = options;
+  const enriched: Array<Record<string, unknown>> = [];
+  let failed = 0;
+  let toolCalls = 0;
+
+  // Process in batches to respect rate limits
+  for (let i = 0; i < records.length; i += concurrency) {
+    const batch = records.slice(i, i + concurrency);
+
+    const results = await Promise.allSettled(
+      batch.map((record) => enrichWithTools(record, tools, handlers))
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        enriched.push(result.value);
+      } else {
+        failed++;
+        console.error(`Enrichment failed: ${result.reason}`);
+      }
+    }
+
+    // Delay between batches to avoid rate limits
+    if (i + concurrency < records.length) {
+      await new Promise((resolve) => setTimeout(resolve, batchDelay));
+    }
+  }
+
+  return {
+    enriched,
+    stats: { succeeded: enriched.length, failed, toolCalls },
+  };
+}
+```
+
+### Integrating into a Full Pipeline
+
+The tool-enrichment step fits naturally into your pipeline:
+
+```typescript
+async function fullPipeline(csvPath: string): Promise<PipelineResult> {
+  const metrics = new PipelineMetrics();
+  metrics.startPipeline();
+
+  // Stage 1: Parse
+  metrics.startStage("parse", 0);
+  const raw = parse(readFileSync(csvPath, "utf-8"), { columns: true });
+  metrics.endStage("parse", raw.length);
+
+  // Stage 2: Validate
+  metrics.startStage("validate", raw.length);
+  const { valid, invalid } = validateRecords(raw, RecordSchema);
+  metrics.endStage("validate", valid.length, invalid.length);
+
+  // Stage 3: Tool-powered enrichment (this is the new part!)
+  metrics.startStage("tool-enrichment", valid.length);
+  const { enriched, stats } = await batchEnrichWithTools(
+    valid,
+    enrichmentTools,
+    toolHandlers,
+    { concurrency: 3 }
+  );
+  metrics.endStage("tool-enrichment", enriched.length, stats.failed);
+  metrics.addCustomMetric("tool-enrichment", "toolCalls", stats.toolCalls);
+
+  // Stage 4: Export
+  metrics.startStage("export", enriched.length);
+  const report = exportToMarkdown(enriched, { title: "Enriched Data" });
+  metrics.endStage("export", enriched.length);
+
+  return {
+    data: enriched,
+    report,
+    metrics: metrics.getSummary(),
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+Tool-powered enrichment represents the cutting edge of AI data pipelines:
+
+1. **Dynamic enrichment**: The LLM decides which tools to call based on the data. A record with a company name triggers company lookup; a record with an address triggers geocoding. No hardcoded rules needed.
+2. **Flexible integration**: You can add new tools without changing the pipeline logic. The LLM automatically uses them when relevant.
+3. **Complex reasoning**: The LLM can chain multiple tool calls -- looking up a company, then geocoding its headquarters, then categorizing its products -- all from a single enrichment request.
+4. **Cross-module synergy**: This exercise combines templates (M1) for prompts, LLM API calls (M2) for reasoning, tool use (M3) for external data, and pipeline patterns (M4) for orchestration.
+
+## Common Mistakes
+
+- **Not handling the tool loop.** The LLM may call multiple tools in sequence. You need to loop until `stop_reason` is no longer `"tool_use"`.
+- **Missing error handling in tool handlers.** If a tool handler throws, the entire enrichment fails. Always catch errors and return error messages as tool results.
+- **Making too many concurrent API calls.** LLM APIs have rate limits. Use a concurrency limit and add delays between batches.
+- **Not validating the LLM's final output.** The LLM might return malformed JSON. Always try/catch the JSON parse and fall back to the original record.
+- **Ignoring tool call costs.** Each tool call means additional tokens in the conversation. Track the number of tool calls as a cost metric.
+
+## Your Task
+
+Build a tool-powered enrichment pipeline that defines at least two tools (company lookup and product categorization), processes an array of records using LLM tool calling, handles the tool use loop correctly, and returns enriched records with pipeline metrics.

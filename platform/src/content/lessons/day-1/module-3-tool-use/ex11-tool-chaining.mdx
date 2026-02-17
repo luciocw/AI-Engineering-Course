@@ -1,0 +1,265 @@
+---
+title: "Tool Chaining"
+description: "Learn how the LLM chains tools sequentially, passing the output of one tool as input to the next, and build pipeline patterns."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 11
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "chaining", "pipelines", "sequential-execution", "advanced"]
+---
+
+## What You'll Learn
+
+- How the LLM naturally chains tool calls across loop iterations
+- Designing tools whose outputs feed into other tools
+- Pipeline patterns for multi-step workflows
+- When to let the LLM chain vs. when to chain in your code
+
+## Key Concepts
+
+### What Is Tool Chaining?
+
+Tool chaining happens when the LLM calls one tool, examines the result, then calls another tool using information from the first. Each iteration of the tool use loop is a link in the chain.
+
+```
+User: "What's the weather in the capital of France?"
+
+Step 1: LLM calls → lookup_capital({ country: "France" })
+        Result:    → { capital: "Paris" }
+
+Step 2: LLM calls → get_weather({ city: "Paris" })
+        Result:    → { temp: 18, conditions: "Cloudy" }
+
+Step 3: LLM responds → "The weather in Paris, the capital of France, is 18°C and cloudy."
+```
+
+The LLM figured out on its own that it needed two steps. Your tool use loop handles this automatically because it keeps looping while `stop_reason === "tool_use"`.
+
+### The Loop Already Supports Chaining
+
+The standard tool use loop from Exercise 2 already handles chaining. Each iteration, the LLM sees all previous tool results and decides what to do next:
+
+```typescript
+async function runWithTools(userMessage: string): Promise<string> {
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools,
+    messages,
+  });
+
+  let iterations = 0;
+  const MAX_ITERATIONS = 10; // Safety limit
+
+  while (response.stop_reason === "tool_use" && iterations < MAX_ITERATIONS) {
+    iterations++;
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        console.log(`Chain step ${iterations}: ${block.name}`);
+        const result = await executeTool(block.name, block.input);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      }
+    }
+
+    messages.push({ role: "user", content: toolResults });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools,
+      messages,
+    });
+  }
+
+  const text = response.content.find((b) => b.type === "text");
+  return text?.type === "text" ? text.text : "";
+}
+```
+
+### Designing Tools for Chaining
+
+Make your tools composable by having them output data that other tools can consume:
+
+```typescript
+const tools: Anthropic.Tool[] = [
+  {
+    name: "find_user",
+    description: "Find a user by name or email. Returns user ID and profile data. " +
+      "Use this first when you need to perform operations on a specific user.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Name or email to search" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "get_user_orders",
+    description: "Get recent orders for a user. Requires the user_id from find_user. " +
+      "Returns a list of order objects with IDs, dates, and totals.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        user_id: { type: "string", description: "User ID from find_user" },
+        limit: { type: "number", description: "Max orders to return (default 5)" },
+      },
+      required: ["user_id"],
+    },
+  },
+  {
+    name: "get_order_details",
+    description: "Get full details for a specific order. Requires order_id from " +
+      "get_user_orders. Returns items, shipping status, and tracking info.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        order_id: { type: "string", description: "Order ID from get_user_orders" },
+      },
+      required: ["order_id"],
+    },
+  },
+];
+```
+
+Notice how descriptions reference other tools: "Requires the user_id **from find_user**". This guides the LLM to chain correctly.
+
+### Pipeline Patterns
+
+For predictable multi-step workflows, you can build explicit pipelines in your code:
+
+```typescript
+interface PipelineStep {
+  toolName: string;
+  buildInput: (context: Record<string, any>) => Record<string, any>;
+  extractOutput: (result: string) => Record<string, any>;
+}
+
+async function runPipeline(
+  steps: PipelineStep[],
+  initialContext: Record<string, any> = {}
+): Promise<Record<string, any>> {
+  let context = { ...initialContext };
+
+  for (const step of steps) {
+    console.log(`Pipeline step: ${step.toolName}`);
+
+    const input = step.buildInput(context);
+    const result = await executeTool(step.toolName, input);
+    const output = step.extractOutput(result);
+
+    context = { ...context, ...output };
+  }
+
+  return context;
+}
+
+// Usage: User onboarding pipeline
+const onboardingPipeline: PipelineStep[] = [
+  {
+    toolName: "create_user",
+    buildInput: (ctx) => ({ name: ctx.name, email: ctx.email }),
+    extractOutput: (result) => {
+      const data = JSON.parse(result);
+      return { userId: data.id };
+    },
+  },
+  {
+    toolName: "setup_workspace",
+    buildInput: (ctx) => ({ user_id: ctx.userId, template: "default" }),
+    extractOutput: (result) => {
+      const data = JSON.parse(result);
+      return { workspaceId: data.id };
+    },
+  },
+  {
+    toolName: "send_welcome_email",
+    buildInput: (ctx) => ({
+      user_id: ctx.userId,
+      workspace_url: `https://app.example.com/w/${ctx.workspaceId}`,
+    }),
+    extractOutput: () => ({ emailSent: true }),
+  },
+];
+
+const result = await runPipeline(onboardingPipeline, {
+  name: "Alice",
+  email: "alice@example.com",
+});
+```
+
+### LLM Chaining vs. Code Chaining
+
+| Approach | When to Use | Pros | Cons |
+|----------|-------------|------|------|
+| **LLM chains** (let the model decide) | Open-ended tasks, variable workflows | Flexible, handles edge cases | More API calls, unpredictable |
+| **Code chains** (explicit pipeline) | Fixed workflows, deterministic steps | Predictable, efficient | Rigid, cannot adapt |
+
+For most applications, let the LLM chain naturally. Use code pipelines only for well-defined, repeatable workflows.
+
+### Adding Iteration Limits
+
+Always protect against infinite loops:
+
+```typescript
+const MAX_CHAIN_DEPTH = 10;
+let depth = 0;
+
+while (response.stop_reason === "tool_use") {
+  depth++;
+  if (depth > MAX_CHAIN_DEPTH) {
+    console.warn(`Tool chain exceeded ${MAX_CHAIN_DEPTH} iterations. Stopping.`);
+    // Add a message telling the LLM to wrap up
+    messages.push({
+      role: "user",
+      content: "You have reached the maximum number of tool calls. " +
+        "Please provide your best answer with the information gathered so far.",
+    });
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools,
+      messages,
+    });
+    break;
+  }
+
+  // ... normal tool execution
+}
+```
+
+## Common Mistakes
+
+1. **No iteration limit** -- Without a max depth, a confused LLM could loop forever. Always set a limit.
+
+2. **Tool descriptions that don't reference each other** -- If `get_user_orders` needs a `user_id` from `find_user`, say so in the description. Otherwise the LLM might try to guess a user ID.
+
+3. **Not returning IDs in tool results** -- If a later tool needs an ID from an earlier one, make sure the first tool's result includes it prominently.
+
+4. **Overly granular tools** -- If three tools always get called together in the same order, consider combining them into one tool. Fewer steps means fewer API calls.
+
+5. **Not logging the chain** -- In production, log each step of the chain so you can debug unexpected paths. Add timestamps and the tool inputs/outputs.
+
+## Your Task
+
+Build a travel planning chain with four tools:
+
+1. `search_flights` -- takes origin, destination, date; returns flight options with IDs
+2. `get_flight_details` -- takes flight_id; returns full details including price
+3. `search_hotels` -- takes city, check_in, check_out; returns hotel options with IDs
+4. `estimate_trip_cost` -- takes flight_price, hotel_price_per_night, num_nights; returns total
+
+When the user says "Plan a trip from NYC to London next week", the LLM should chain through all four tools to give a complete trip estimate. Implement the tools with mock data and include an iteration limit.

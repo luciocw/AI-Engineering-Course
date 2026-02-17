@@ -1,0 +1,423 @@
+---
+title: "Prompt Registry: Version-Controlled Prompts"
+description: "Build a PromptRegistry class for managing version-controlled prompts with template integration and API call patterns."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 10
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "prompt-registry", "version-control", "templates", "prompt-management", "architecture"]
+---
+
+## What You'll Learn
+
+- Why prompts need version control just like code
+- How to build a PromptRegistry class
+- Managing prompt versions, metadata, and configuration
+- Integrating the registry with templates and API calls
+- Patterns for prompt lifecycle management
+
+## Key Concepts
+
+### Why a Prompt Registry?
+
+In production, prompts are not just strings -- they are critical business logic. Changing a word in a prompt can change your application's behavior entirely. Without a registry, you end up with:
+
+- Prompts scattered across your codebase
+- No way to know which version is running in production
+- No ability to roll back when a prompt change breaks something
+- No audit trail of who changed what and when
+
+A prompt registry centralizes all of this. Think of it as a database for your prompts, with version history and metadata.
+
+### The PromptRegistry Class
+
+```typescript
+import Handlebars from "handlebars";
+
+interface PromptVersion {
+  version: string;
+  systemTemplate: string;
+  userTemplate: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  metadata: {
+    author: string;
+    description: string;
+    createdAt: Date;
+    tags: string[];
+  };
+}
+
+interface PromptConfig {
+  name: string;
+  activeVersion: string;
+  versions: Map<string, PromptVersion>;
+}
+
+class PromptRegistry {
+  private prompts: Map<string, PromptConfig> = new Map();
+
+  register(
+    name: string,
+    version: PromptVersion
+  ): void {
+    let config = this.prompts.get(name);
+
+    if (!config) {
+      config = {
+        name,
+        activeVersion: version.version,
+        versions: new Map(),
+      };
+      this.prompts.set(name, config);
+    }
+
+    if (config.versions.has(version.version)) {
+      throw new Error(
+        `Version ${version.version} already exists for prompt "${name}". Use a new version number.`
+      );
+    }
+
+    config.versions.set(version.version, version);
+  }
+
+  setActiveVersion(name: string, version: string): void {
+    const config = this.prompts.get(name);
+    if (!config) throw new Error(`Prompt "${name}" not found`);
+    if (!config.versions.has(version)) {
+      throw new Error(`Version "${version}" not found for prompt "${name}"`);
+    }
+    config.activeVersion = version;
+  }
+
+  getActive(name: string): PromptVersion {
+    const config = this.prompts.get(name);
+    if (!config) throw new Error(`Prompt "${name}" not found`);
+    return config.versions.get(config.activeVersion)!;
+  }
+
+  getVersion(name: string, version: string): PromptVersion {
+    const config = this.prompts.get(name);
+    if (!config) throw new Error(`Prompt "${name}" not found`);
+    const v = config.versions.get(version);
+    if (!v) throw new Error(`Version "${version}" not found for prompt "${name}"`);
+    return v;
+  }
+
+  listVersions(name: string): string[] {
+    const config = this.prompts.get(name);
+    if (!config) throw new Error(`Prompt "${name}" not found`);
+    return Array.from(config.versions.keys());
+  }
+
+  listPrompts(): string[] {
+    return Array.from(this.prompts.keys());
+  }
+}
+```
+
+### Registering Prompts with Versions
+
+```typescript
+const registry = new PromptRegistry();
+
+// Version 1.0: Initial prompt
+registry.register("sentiment-analyzer", {
+  version: "1.0.0",
+  systemTemplate:
+    "You are a sentiment analysis assistant. Classify text as positive, negative, or neutral.",
+  userTemplate: "Classify the sentiment of this text: {{text}}",
+  model: "claude-haiku-3-5",
+  temperature: 0,
+  maxTokens: 20,
+  metadata: {
+    author: "team-ml",
+    description: "Basic sentiment classifier",
+    createdAt: new Date("2024-01-15"),
+    tags: ["sentiment", "classification", "v1"],
+  },
+});
+
+// Version 1.1: Added confidence score
+registry.register("sentiment-analyzer", {
+  version: "1.1.0",
+  systemTemplate: `You are a sentiment analysis assistant.
+Classify text as positive, negative, or neutral.
+Include a confidence score between 0 and 1.
+Respond as JSON: {"sentiment": "...", "confidence": 0.XX}`,
+  userTemplate: "Analyze: {{text}}",
+  model: "claude-haiku-3-5",
+  temperature: 0,
+  maxTokens: 50,
+  metadata: {
+    author: "team-ml",
+    description: "Sentiment classifier with confidence scores",
+    createdAt: new Date("2024-02-01"),
+    tags: ["sentiment", "classification", "confidence", "json"],
+  },
+});
+
+// Version 2.0: Major revision with few-shot examples
+registry.register("sentiment-analyzer", {
+  version: "2.0.0",
+  systemTemplate: `You are a sentiment analysis engine.
+
+<output_format>
+{"sentiment": "positive"|"negative"|"neutral"|"mixed", "confidence": number, "aspects": string[]}
+</output_format>
+
+<examples>
+Input: "Great product but terrible shipping"
+Output: {"sentiment": "mixed", "confidence": 0.9, "aspects": ["product quality", "shipping"]}
+</examples>
+
+Respond with JSON only.`,
+  userTemplate: "Input: {{text}}",
+  model: "claude-sonnet-4-20250514",
+  temperature: 0,
+  maxTokens: 100,
+  metadata: {
+    author: "team-ml",
+    description: "Advanced sentiment with aspect extraction and mixed category",
+    createdAt: new Date("2024-03-10"),
+    tags: ["sentiment", "classification", "aspects", "json", "few-shot"],
+  },
+});
+
+// Set the active version
+registry.setActiveVersion("sentiment-analyzer", "2.0.0");
+```
+
+### Integrating with API Calls
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+async function executePrompt(
+  registry: PromptRegistry,
+  promptName: string,
+  data: Record<string, unknown>,
+  version?: string
+): Promise<{ result: string; promptVersion: string; usage: { input: number; output: number } }> {
+  // Get the prompt version (active or specified)
+  const prompt = version
+    ? registry.getVersion(promptName, version)
+    : registry.getActive(promptName);
+
+  // Compile templates with data
+  const systemPrompt = Handlebars.compile(prompt.systemTemplate)(data);
+  const userMessage = Handlebars.compile(prompt.userTemplate)(data);
+
+  // Make the API call with the prompt's configured parameters
+  const response = await client.messages.create({
+    model: prompt.model,
+    max_tokens: prompt.maxTokens,
+    temperature: prompt.temperature,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  return {
+    result: text,
+    promptVersion: prompt.version,
+    usage: {
+      input: response.usage.input_tokens,
+      output: response.usage.output_tokens,
+    },
+  };
+}
+
+// Usage
+const result = await executePrompt(registry, "sentiment-analyzer", {
+  text: "The food was delicious but the service was slow.",
+});
+
+console.log(`Version: ${result.promptVersion}`);
+console.log(`Result: ${result.result}`);
+console.log(`Tokens: ${result.usage.input} in / ${result.usage.output} out`);
+```
+
+### Comparing Versions
+
+A key benefit of the registry is easy version comparison:
+
+```typescript
+async function compareVersions(
+  registry: PromptRegistry,
+  promptName: string,
+  testInputs: Array<{ text: string; expected?: string }>,
+  versions: string[]
+) {
+  const results: Record<
+    string,
+    Array<{ input: string; output: string; latencyMs: number; tokens: number }>
+  > = {};
+
+  for (const version of versions) {
+    results[version] = [];
+
+    for (const input of testInputs) {
+      const startTime = Date.now();
+
+      const result = await executePrompt(
+        registry,
+        promptName,
+        { text: input.text },
+        version
+      );
+
+      results[version].push({
+        input: input.text,
+        output: result.result,
+        latencyMs: Date.now() - startTime,
+        tokens: result.usage.input + result.usage.output,
+      });
+    }
+  }
+
+  // Print comparison
+  for (const input of testInputs) {
+    console.log(`\nInput: "${input.text}"`);
+    for (const version of versions) {
+      const r = results[version].find((x) => x.input === input.text)!;
+      console.log(`  v${version}: ${r.output} (${r.latencyMs}ms, ${r.tokens} tokens)`);
+    }
+  }
+}
+
+// Compare versions
+await compareVersions(
+  registry,
+  "sentiment-analyzer",
+  [
+    { text: "I love it!" },
+    { text: "Terrible experience, never again." },
+    { text: "It was fine, nothing special." },
+    { text: "Great product but awful customer service." },
+  ],
+  ["1.0.0", "1.1.0", "2.0.0"]
+);
+```
+
+### Serialization and Persistence
+
+For production use, you need to save and load the registry:
+
+```typescript
+interface SerializedRegistry {
+  prompts: Array<{
+    name: string;
+    activeVersion: string;
+    versions: Array<{
+      version: string;
+      systemTemplate: string;
+      userTemplate: string;
+      model: string;
+      temperature: number;
+      maxTokens: number;
+      metadata: {
+        author: string;
+        description: string;
+        createdAt: string;
+        tags: string[];
+      };
+    }>;
+  }>;
+}
+
+class PersistentPromptRegistry extends PromptRegistry {
+  serialize(): SerializedRegistry {
+    const prompts: SerializedRegistry["prompts"] = [];
+
+    for (const name of this.listPrompts()) {
+      const versions = this.listVersions(name).map((v) => {
+        const version = this.getVersion(name, v);
+        return {
+          ...version,
+          metadata: {
+            ...version.metadata,
+            createdAt: version.metadata.createdAt.toISOString(),
+          },
+        };
+      });
+
+      prompts.push({
+        name,
+        activeVersion: this.getActive(name).version,
+        versions,
+      });
+    }
+
+    return { prompts };
+  }
+
+  static fromSerialized(data: SerializedRegistry): PersistentPromptRegistry {
+    const registry = new PersistentPromptRegistry();
+
+    for (const prompt of data.prompts) {
+      for (const version of prompt.versions) {
+        registry.register(prompt.name, {
+          ...version,
+          metadata: {
+            ...version.metadata,
+            createdAt: new Date(version.metadata.createdAt),
+          },
+        });
+      }
+      registry.setActiveVersion(prompt.name, prompt.activeVersion);
+    }
+
+    return registry;
+  }
+
+  async saveToFile(filePath: string): Promise<void> {
+    const fs = await import("fs/promises");
+    await fs.writeFile(filePath, JSON.stringify(this.serialize(), null, 2));
+  }
+
+  static async loadFromFile(filePath: string): Promise<PersistentPromptRegistry> {
+    const fs = await import("fs/promises");
+    const data = JSON.parse(await fs.readFile(filePath, "utf-8"));
+    return PersistentPromptRegistry.fromSerialized(data);
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Modifying prompts in place instead of creating new versions**: Once a version is deployed and tested, it should be immutable. Always create a new version for changes -- even small ones. This lets you roll back instantly if something goes wrong.
+
+2. **Not storing model parameters with the prompt**: A prompt that works at temperature 0 might fail at temperature 0.7. Store the model, temperature, and max_tokens alongside the prompt template so the full configuration travels together.
+
+3. **Missing metadata**: Without author, date, and description, you will struggle to understand why a prompt was changed six months later. Treat metadata as required, not optional.
+
+4. **Not testing before switching active versions**: Always compare the new version against the old one with your test suite before making it active in production.
+
+5. **Overcomplicating the registry**: Start simple. A Map with version strings is enough to get started. You can add databases, APIs, and caching later when you actually need them.
+
+## Your Task
+
+Build a complete `PromptRegistry` system that:
+
+1. Supports registering prompts with multiple versions
+2. Stores model configuration (model, temperature, max_tokens) per version
+3. Includes metadata (author, description, creation date, tags)
+4. Has an `executePrompt` function that compiles templates and makes API calls
+5. Has a `compareVersions` function that runs test cases against multiple versions
+6. Can serialize to and deserialize from JSON
+
+Create a prompt called `"code-explainer"` with two versions:
+- v1.0: Basic explanation prompt
+- v2.0: Enhanced with examples and structured output
+
+Test both versions with the same code snippets and compare the quality of output.
+
+Bonus: Add a `rollback` method that switches the active version to the previous one and logs the change.

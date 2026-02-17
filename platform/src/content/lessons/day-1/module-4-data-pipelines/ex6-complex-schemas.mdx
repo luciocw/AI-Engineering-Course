@@ -1,0 +1,244 @@
+---
+title: "Complex Schemas"
+description: "Learn nested Zod schemas, transforms, refinements, discriminated unions for variant data, and custom error messages."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 6
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "zod", "schemas", "transforms", "unions", "validation"]
+---
+
+## What You'll Learn
+
+You will learn how to build complex Zod schemas that handle real-world data: nested objects, data transformations during validation, custom refinement rules, discriminated unions for records that come in different shapes, and clear custom error messages. These techniques let you validate sophisticated data structures that appear in production AI pipelines.
+
+## Key Concepts
+
+### Nested Schemas
+
+Real data is rarely flat. Orders have line items. Users have addresses. API responses have nested metadata. Zod handles nesting naturally by composing schemas:
+
+```typescript
+import { z } from "zod";
+
+const AddressSchema = z.object({
+  street: z.string().min(1),
+  city: z.string().min(1),
+  state: z.string().length(2),
+  zip: z.string().regex(/^\d{5}(-\d{4})?$/),
+});
+
+const ContactSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  address: AddressSchema,         // Nested schema
+  tags: z.array(z.string()),      // Array of strings
+});
+
+type Contact = z.infer<typeof ContactSchema>;
+// {
+//   name: string;
+//   email: string;
+//   phone?: string;
+//   address: { street: string; city: string; state: string; zip: string };
+//   tags: string[];
+// }
+```
+
+Build small schemas and compose them. This keeps each piece testable and reusable.
+
+### Arrays with Constraints
+
+You can validate arrays with specific length and element constraints:
+
+```typescript
+const OrderSchema = z.object({
+  orderId: z.string().uuid(),
+  items: z
+    .array(
+      z.object({
+        productId: z.string(),
+        quantity: z.number().int().positive(),
+        unitPrice: z.number().positive(),
+      })
+    )
+    .min(1, "Order must have at least one item")
+    .max(100, "Order cannot exceed 100 items"),
+  notes: z.array(z.string()).default([]),  // Default to empty array
+});
+```
+
+The `.default([])` is especially useful for optional arrays -- if the field is missing, Zod fills in an empty array instead of failing validation.
+
+### Transforms: Validate and Convert in One Step
+
+Transforms let you change the data as part of validation. This is perfect for CSV data where everything starts as strings:
+
+```typescript
+// Convert string to number during validation
+const NumericStringSchema = z
+  .string()
+  .transform((val) => parseFloat(val))
+  .refine((val) => !isNaN(val), { message: "Must be a valid number" });
+
+// Convert CSV row with string values to typed object
+const CSVRowSchema = z.object({
+  product: z.string().min(1),
+  quantity: z.string().transform((val) => parseInt(val, 10)),
+  price: z.string().transform((val) => parseFloat(val)),
+  date: z.string().transform((val) => new Date(val)),
+});
+
+type CSVRow = z.infer<typeof CSVRowSchema>;
+// { product: string; quantity: number; price: number; date: Date }
+```
+
+The input type and output type are different. Zod tracks both. The schema accepts strings but outputs numbers and Dates.
+
+### Refinements: Custom Validation Rules
+
+When built-in validators are not enough, use `.refine()` for custom logic:
+
+```typescript
+const DateRangeSchema = z
+  .object({
+    startDate: z.string().datetime(),
+    endDate: z.string().datetime(),
+  })
+  .refine((data) => new Date(data.startDate) < new Date(data.endDate), {
+    message: "Start date must be before end date",
+    path: ["endDate"],  // Which field to attach the error to
+  });
+
+// Validate business rules
+const DiscountSchema = z
+  .object({
+    originalPrice: z.number().positive(),
+    discountPercent: z.number().min(0).max(100),
+    finalPrice: z.number().nonnegative(),
+  })
+  .refine(
+    (data) => {
+      const expected = data.originalPrice * (1 - data.discountPercent / 100);
+      return Math.abs(data.finalPrice - expected) < 0.01;
+    },
+    { message: "Final price does not match discount calculation" }
+  );
+```
+
+Use `.superRefine()` when you need to add multiple errors at once:
+
+```typescript
+const PasswordSchema = z.string().superRefine((val, ctx) => {
+  if (val.length < 8) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Password must be at least 8 characters",
+    });
+  }
+  if (!/[A-Z]/.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Password must contain an uppercase letter",
+    });
+  }
+  if (!/[0-9]/.test(val)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Password must contain a number",
+    });
+  }
+});
+```
+
+### Discriminated Unions: Handling Variant Data
+
+Sometimes records come in different shapes based on a "type" field. A discriminated union validates each variant independently:
+
+```typescript
+const TextEventSchema = z.object({
+  type: z.literal("text"),
+  content: z.string().min(1),
+  language: z.string().default("en"),
+});
+
+const ImageEventSchema = z.object({
+  type: z.literal("image"),
+  url: z.string().url(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  altText: z.string().optional(),
+});
+
+const AudioEventSchema = z.object({
+  type: z.literal("audio"),
+  url: z.string().url(),
+  durationSeconds: z.number().positive(),
+  transcript: z.string().optional(),
+});
+
+// Zod picks the right schema based on the "type" field
+const EventSchema = z.discriminatedUnion("type", [
+  TextEventSchema,
+  ImageEventSchema,
+  AudioEventSchema,
+]);
+
+type Event = z.infer<typeof EventSchema>;
+
+// Validation knows which fields to check based on type
+EventSchema.parse({ type: "text", content: "Hello" });        // Valid
+EventSchema.parse({ type: "image", url: "https://...", width: 100, height: 100 }); // Valid
+EventSchema.parse({ type: "text", url: "https://..." });      // Error: missing content
+```
+
+This is powerful for AI pipelines that process mixed content types (text, images, audio) from a single stream.
+
+### Custom Error Messages
+
+Clear error messages make debugging much easier:
+
+```typescript
+const ProductSchema = z.object({
+  name: z
+    .string({ required_error: "Product name is required" })
+    .min(1, "Product name cannot be empty")
+    .max(200, "Product name is too long (max 200 characters)"),
+  price: z
+    .number({
+      required_error: "Price is required",
+      invalid_type_error: "Price must be a number",
+    })
+    .positive("Price must be greater than zero")
+    .max(1_000_000, "Price exceeds maximum allowed value"),
+  category: z.enum(["electronics", "clothing", "food", "other"], {
+    errorMap: () => ({
+      message: "Category must be one of: electronics, clothing, food, other",
+    }),
+  }),
+});
+```
+
+### Why This Matters for AI Engineering
+
+Complex schemas are essential for AI pipelines because:
+
+1. **Multi-modal data**: AI applications increasingly handle text, images, and structured data together. Discriminated unions model this naturally.
+2. **API response validation**: LLM APIs return complex nested JSON. Validating the response ensures your code handles edge cases.
+3. **Data transformation**: Transforms let you convert raw strings into properly typed objects in a single step, simplifying your pipeline.
+4. **Clear errors**: When a pipeline fails at 3 AM, custom error messages tell you exactly what went wrong without digging through logs.
+
+## Common Mistakes
+
+- **Forgetting that transforms change the inferred type.** After `.transform()`, `z.infer<typeof schema>` returns the output type, not the input type. If you need the input type, use `z.input<typeof schema>`.
+- **Using regular `union` instead of `discriminatedUnion`.** A regular union tries every variant and shows confusing errors. A discriminated union checks the discriminator field first and shows clear errors.
+- **Adding refinements before transforms.** Refinements run on the current type. If you need to refine the transformed value, put `.refine()` after `.transform()`.
+- **Making schemas too strict too early.** Start permissive and tighten as you discover what your data actually looks like. Over-strict schemas reject valid data.
+- **Not testing schemas with edge cases.** Test with empty strings, zero values, null, undefined, and malformed data. These are the inputs that break production systems.
+
+## Your Task
+
+Create a Zod schema that handles an array of events with three different types (text, image, metric). Use a discriminated union based on a `type` field. Include transforms to convert string timestamps to Date objects. Add custom error messages for each validation rule. Validate a mixed array and return the valid events grouped by type.

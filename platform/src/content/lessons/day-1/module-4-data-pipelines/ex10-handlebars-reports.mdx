@@ -1,0 +1,244 @@
+---
+title: "Handlebars Reports"
+description: "Learn to use Handlebars templates from Module 1 to generate data reports with tables, conditional formatting, and structured output."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 10
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "handlebars", "reports", "tables", "formatting", "cross-module"]
+---
+
+## What You'll Learn
+
+You will learn how to connect data pipelines with the Handlebars templating skills from Module 1. You will generate structured data reports with tables, conditional formatting, and summary statistics. This is the first cross-module exercise, showing how skills from different modules combine in real applications.
+
+## Key Concepts
+
+### From Data to Reports
+
+You have learned how to parse, clean, validate, and enrich data. But data sitting in a TypeScript array is not useful to stakeholders. They need reports -- readable, formatted documents they can review. Handlebars (from Module 1) is the bridge from data to presentation.
+
+The pattern is:
+1. **Data pipeline** produces structured data (arrays of objects, summary statistics)
+2. **Handlebars template** defines the report layout
+3. **Template execution** combines data with layout to produce the final report
+
+### Building a Table Template
+
+The most common report element is a table. Handlebars' `{{#each}}` helper iterates over arrays:
+
+```typescript
+import Handlebars from "handlebars";
+
+const tableTemplate = Handlebars.compile(`
+# Sales Report
+
+| Product | Region | Quantity | Revenue |
+|---------|--------|----------|---------|
+{{#each records}}
+| {{this.product}} | {{this.region}} | {{this.quantity}} | \${{this.revenue}} |
+{{/each}}
+
+**Total Records:** {{totalRecords}}
+**Total Revenue:** \${{totalRevenue}}
+`);
+
+// Data from your pipeline
+const reportData = {
+  records: [
+    { product: "Widget", region: "West", quantity: 100, revenue: 2500 },
+    { product: "Gadget", region: "East", quantity: 50, revenue: 2500 },
+    { product: "Gizmo", region: "West", quantity: 30, revenue: 2250 },
+  ],
+  totalRecords: 3,
+  totalRevenue: 7250,
+};
+
+const report = tableTemplate(reportData);
+```
+
+This produces a Markdown table that renders beautifully in any Markdown viewer, documentation site, or LLM response.
+
+### Conditional Formatting
+
+Use `{{#if}}` to show different content based on data values. First, register a Handlebars helper for comparisons:
+
+```typescript
+// Register comparison helpers
+Handlebars.registerHelper("gt", (a: number, b: number) => a > b);
+Handlebars.registerHelper("lt", (a: number, b: number) => a < b);
+Handlebars.registerHelper("eq", (a: any, b: any) => a === b);
+
+const conditionalTemplate = Handlebars.compile(`
+# Inventory Alert Report
+
+{{#each items}}
+## {{this.product}}
+- Stock: {{this.stock}} units
+{{#if (gt this.stock 100)}}
+- Status: Well Stocked
+{{else if (gt this.stock 20)}}
+- Status: Normal
+{{else}}
+- Status: LOW STOCK - Reorder needed!
+{{/if}}
+
+{{/each}}
+`);
+```
+
+### Formatting Helpers
+
+Raw numbers are hard to read. Register helpers for common formatting needs:
+
+```typescript
+Handlebars.registerHelper("currency", (value: number) => {
+  return new Handlebars.SafeString(
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+    }).format(value)
+  );
+});
+
+Handlebars.registerHelper("percent", (value: number) => {
+  return new Handlebars.SafeString(`${(value * 100).toFixed(1)}%`);
+});
+
+Handlebars.registerHelper("dateFormat", (dateStr: string) => {
+  const date = new Date(dateStr);
+  return new Handlebars.SafeString(
+    date.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    })
+  );
+});
+
+const formattedTemplate = Handlebars.compile(`
+## Financial Summary
+
+| Metric | Value |
+|--------|-------|
+| Total Revenue | {{currency totalRevenue}} |
+| Growth Rate | {{percent growthRate}} |
+| Report Date | {{dateFormat reportDate}} |
+`);
+```
+
+### Nested Data and Section Reports
+
+Real reports have sections. Use nested `{{#each}}` for grouped data:
+
+```typescript
+const sectionTemplate = Handlebars.compile(`
+# Regional Sales Report
+Generated: {{dateFormat generatedAt}}
+
+{{#each regions}}
+## {{this.name}} Region
+
+| Product | Units Sold | Revenue | Share |
+|---------|-----------|---------|-------|
+{{#each this.products}}
+| {{this.name}} | {{this.unitsSold}} | {{currency this.revenue}} | {{percent this.share}} |
+{{/each}}
+
+**Region Total:** {{currency this.totalRevenue}}
+**Top Product:** {{this.topProduct}}
+
+---
+
+{{/each}}
+
+## Overall Summary
+
+- **Total Revenue:** {{currency overallTotal}}
+- **Number of Regions:** {{regions.length}}
+- **Best Performing Region:** {{bestRegion}}
+`);
+```
+
+### Complete Report Pipeline
+
+Here is how you connect your data pipeline to Handlebars:
+
+```typescript
+interface ReportConfig {
+  title: string;
+  template: string;
+  data: Record<string, unknown>;
+}
+
+function generateReport(config: ReportConfig): string {
+  // Register any needed helpers
+  Handlebars.registerHelper("currency", (value: number) =>
+    new Handlebars.SafeString(
+      new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+      }).format(value)
+    )
+  );
+
+  // Compile and execute the template
+  const template = Handlebars.compile(config.template);
+  return template(config.data);
+}
+
+// Combine data pipeline output with report generation
+async function buildSalesReport(csvPath: string): Promise<string> {
+  // Step 1: Data pipeline (parse, clean, enrich)
+  const raw = readFileSync(csvPath, "utf-8");
+  const records = parse(raw, { columns: true, skip_empty_lines: true });
+  const cleaned = cleanRecords(records);
+  const enriched = enrichRecords(cleaned);
+
+  // Step 2: Compute report data
+  const byRegion = groupBy(enriched, "region");
+  const regions = Object.entries(byRegion).map(([name, items]) => ({
+    name,
+    products: summarizeProducts(items),
+    totalRevenue: items.reduce((sum, r) => sum + r.revenue, 0),
+    topProduct: findTopProduct(items),
+  }));
+
+  // Step 3: Generate report with Handlebars
+  return generateReport({
+    title: "Sales Report",
+    template: SALES_REPORT_TEMPLATE,
+    data: {
+      regions,
+      overallTotal: regions.reduce((sum, r) => sum + r.totalRevenue, 0),
+      bestRegion: regions.sort((a, b) => b.totalRevenue - a.totalRevenue)[0]?.name,
+      generatedAt: new Date().toISOString(),
+    },
+  });
+}
+```
+
+### Why This Matters for AI Engineering
+
+Report generation is a core AI Engineering skill because:
+
+1. **LLM output formatting**: You use the same template techniques to format LLM responses for end users
+2. **Data summaries for prompts**: Before sending data to an LLM, you render it as a structured report within the prompt
+3. **Automated reporting**: Data pipeline + templates = automated reports that run on schedule
+4. **Human-in-the-loop**: Reports give humans a readable view of what the AI pipeline processed, enabling oversight
+
+This exercise demonstrates how Module 1 (Handlebars) and Module 4 (Data Pipelines) combine. In production, you rarely use one skill in isolation.
+
+## Common Mistakes
+
+- **Not escaping special characters.** Handlebars escapes HTML by default. If you want raw output (like Markdown), use triple braces `{{{value}}}` or `SafeString`.
+- **Forgetting to register helpers before compiling.** Helpers must be registered before `Handlebars.compile()` is called, or the template will not recognize them.
+- **Putting logic in templates.** Keep complex calculations in your TypeScript pipeline, not in Handlebars. The template should only handle formatting and layout.
+- **Not handling empty data.** Use `{{#if records.length}}` to show a "No data" message instead of rendering an empty table.
+- **Registering the same helper multiple times.** If your report function is called repeatedly, move helper registration to a one-time setup function.
+
+## Your Task
+
+Build a report generator that takes pipeline output (an array of sales records grouped by region) and produces a formatted Markdown report using Handlebars. Include a summary table, per-region breakdowns, conditional formatting for high/low performers, and formatted currency values.

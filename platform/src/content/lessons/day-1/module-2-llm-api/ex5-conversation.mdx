@@ -1,0 +1,364 @@
+---
+title: "Multi-Turn Conversations"
+description: "Learn how to build multi-turn conversations with message arrays, role alternation, context maintenance, and chat interfaces."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 5
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["llm", "api", "conversation", "multi-turn", "chat", "message-array", "context"]
+---
+
+## What You'll Learn
+
+- How multi-turn conversations work with message arrays
+- The rules of role alternation (user/assistant)
+- How context is maintained across turns
+- How to build a basic interactive chat interface
+
+## Key Concepts
+
+### How Conversations Work
+
+LLM APIs are stateless. The model does not remember previous conversations. Every time you make an API call, you send the **entire** conversation history, and the model generates the next response.
+
+```typescript
+// Turn 1: Just a user message
+const turn1Messages = [
+  { role: "user" as const, content: "What is TypeScript?" },
+];
+
+// Turn 2: Previous exchange + new user message
+const turn2Messages = [
+  { role: "user" as const, content: "What is TypeScript?" },
+  {
+    role: "assistant" as const,
+    content: "TypeScript is a typed superset of JavaScript...",
+  },
+  { role: "user" as const, content: "How does it handle generics?" },
+];
+
+// Turn 3: Full history + new user message
+const turn3Messages = [
+  { role: "user" as const, content: "What is TypeScript?" },
+  {
+    role: "assistant" as const,
+    content: "TypeScript is a typed superset of JavaScript...",
+  },
+  { role: "user" as const, content: "How does it handle generics?" },
+  {
+    role: "assistant" as const,
+    content: "Generics in TypeScript allow you to...",
+  },
+  { role: "user" as const, content: "Show me an example with a linked list." },
+];
+```
+
+Each API call sends the full history. This is why conversations get more expensive over time -- you are resending all previous tokens with every new message.
+
+### Role Alternation Rules
+
+Messages must alternate between `user` and `assistant` roles. The conversation must start with a `user` message and end with a `user` message (so the model knows to generate the next `assistant` response).
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+type MessageRole = "user" | "assistant";
+
+interface Message {
+  role: MessageRole;
+  content: string;
+}
+
+// Valid: alternating roles, starts and ends with user
+const validMessages: Message[] = [
+  { role: "user", content: "Hello" },
+  { role: "assistant", content: "Hi there!" },
+  { role: "user", content: "How are you?" },
+];
+
+// Invalid: two user messages in a row
+const invalidMessages: Message[] = [
+  { role: "user", content: "Hello" },
+  { role: "user", content: "Are you there?" }, // Error: consecutive user messages
+];
+
+// Invalid: starts with assistant
+const alsoInvalid: Message[] = [
+  { role: "assistant", content: "Hello!" }, // Error: must start with user
+  { role: "user", content: "Hi" },
+];
+```
+
+### Building a Conversation Manager
+
+Here is a class that manages conversation state properly:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+class Conversation {
+  private client: Anthropic;
+  private messages: ConversationMessage[] = [];
+  private model: string;
+  private systemPrompt: string;
+
+  constructor(config: {
+    model?: string;
+    systemPrompt?: string;
+  }) {
+    this.client = new Anthropic();
+    this.model = config.model ?? "claude-sonnet-4-20250514";
+    this.systemPrompt = config.systemPrompt ?? "";
+  }
+
+  async send(userMessage: string): Promise<string> {
+    // Add the user message to history
+    this.messages.push({ role: "user", content: userMessage });
+
+    // Make the API call with full history
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 1024,
+      system: this.systemPrompt,
+      messages: this.messages,
+    });
+
+    // Extract assistant response
+    const assistantMessage =
+      response.content[0].type === "text" ? response.content[0].text : "";
+
+    // Add assistant response to history
+    this.messages.push({ role: "assistant", content: assistantMessage });
+
+    return assistantMessage;
+  }
+
+  getHistory(): ConversationMessage[] {
+    return [...this.messages];
+  }
+
+  getTokenCount(): number {
+    // Rough estimate based on character count
+    return Math.ceil(
+      this.messages.reduce((sum, m) => sum + m.content.length, 0) / 4
+    );
+  }
+
+  clear(): void {
+    this.messages = [];
+  }
+}
+```
+
+Usage:
+
+```typescript
+const chat = new Conversation({
+  systemPrompt: "You are a helpful coding tutor. Keep explanations concise.",
+});
+
+const reply1 = await chat.send("What is a closure in JavaScript?");
+console.log("Assistant:", reply1);
+
+const reply2 = await chat.send("Can you show me a practical example?");
+console.log("Assistant:", reply2);
+// The model remembers the topic is closures
+
+const reply3 = await chat.send("How does that relate to React hooks?");
+console.log("Assistant:", reply3);
+// The model can connect closures to the React context
+```
+
+### Context and Reference Resolution
+
+The model can resolve references across turns because it sees the full history:
+
+```typescript
+// The model understands "it", "that", "the same thing" etc.
+const messages: ConversationMessage[] = [
+  { role: "user", content: "What is the capital of France?" },
+  { role: "assistant", content: "The capital of France is Paris." },
+  { role: "user", content: "What is its population?" },
+  // "its" refers to Paris - the model understands this
+];
+```
+
+This works because the entire conversation is sent each time. The model is not "remembering" -- it is re-reading the full conversation and understanding the context fresh each time.
+
+### Building an Interactive Chat Interface
+
+Here is a complete CLI chat interface:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import * as readline from "readline";
+
+const client = new Anthropic();
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+async function runChat() {
+  const messages: ChatMessage[] = [];
+  const systemPrompt =
+    "You are a helpful assistant. Keep responses concise but informative.";
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const askQuestion = (prompt: string): Promise<string> => {
+    return new Promise((resolve) => {
+      rl.question(prompt, resolve);
+    });
+  };
+
+  console.log('Chat started. Type "quit" to exit.\n');
+
+  while (true) {
+    const userInput = await askQuestion("You: ");
+
+    if (userInput.toLowerCase() === "quit") {
+      console.log("Goodbye!");
+      rl.close();
+      break;
+    }
+
+    if (!userInput.trim()) {
+      continue;
+    }
+
+    messages.push({ role: "user", content: userInput });
+
+    try {
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages,
+      });
+
+      const assistantMessage =
+        response.content[0].type === "text" ? response.content[0].text : "";
+
+      messages.push({ role: "assistant", content: assistantMessage });
+
+      console.log(`\nAssistant: ${assistantMessage}\n`);
+      console.log(
+        `  [tokens: ${response.usage.input_tokens} in / ${response.usage.output_tokens} out]\n`
+      );
+    } catch (error) {
+      console.error("Error:", error);
+      // Remove the user message that caused the error
+      messages.pop();
+    }
+  }
+}
+
+runChat();
+```
+
+### Understanding Context Costs
+
+Every turn adds to the total tokens sent. This grows linearly:
+
+```typescript
+function estimateConversationCost(
+  messages: ChatMessage[],
+  model: string = "claude-sonnet-4-20250514"
+) {
+  // Each turn resends all previous messages
+  // Turn 1: sends message 1
+  // Turn 2: sends messages 1, 2, 3
+  // Turn 3: sends messages 1, 2, 3, 4, 5
+  // ...and so on
+
+  let totalInputTokens = 0;
+
+  for (let turn = 0; turn < messages.length; turn += 2) {
+    // Each API call sends all messages up to this point
+    const messagesInThisCall = messages.slice(0, turn + 1);
+    const tokensInThisCall = messagesInThisCall.reduce(
+      (sum, m) => sum + Math.ceil(m.content.length / 4),
+      0
+    );
+    totalInputTokens += tokensInThisCall;
+  }
+
+  console.log(`Total input tokens across all turns: ~${totalInputTokens}`);
+  console.log(
+    `A 20-turn conversation costs roughly 10x what a single turn costs in accumulated input tokens.`
+  );
+}
+```
+
+This is why conversation memory management (covered in the next exercise) is critical for production applications.
+
+### Prefilling Assistant Responses
+
+You can include a partial assistant message to guide the model's response format:
+
+```typescript
+const messages: ChatMessage[] = [
+  {
+    role: "user",
+    content: "List 3 benefits of TypeScript. Respond as JSON.",
+  },
+  {
+    role: "assistant",
+    content: '{"benefits": [', // Prefill to force JSON format
+  },
+];
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 256,
+  messages,
+});
+
+// The model continues from where the prefill left off
+const fullResponse = '{"benefits": [' + response.content[0].text;
+```
+
+This technique (called "prefilling") is powerful for controlling output format, but use it carefully -- the model must generate valid content that continues from your prefill.
+
+## Common Mistakes
+
+1. **Not maintaining proper role alternation**: Always ensure messages alternate user/assistant. If you need to combine multiple user inputs, concatenate them into a single user message.
+
+2. **Forgetting that the API is stateless**: The model does not remember your last call. You must send the full conversation every time. If you forget to append the assistant's response to your message array, the context is lost.
+
+3. **Unbounded conversation growth**: Without limits, a long conversation will eventually exceed the context window and fail. Plan for this from the start (more in the next exercise).
+
+4. **Not handling errors mid-conversation**: If an API call fails, do not add the user message to history (or remove it). Otherwise your message array will have two consecutive user messages.
+
+5. **Sending too much context**: Long conversations get expensive fast. If a conversation goes 20+ turns, you are paying to resend all previous turns each time. Use summarization or windowing strategies.
+
+## Your Task
+
+Build a `Conversation` class that:
+
+1. Manages a message array with proper role alternation
+2. Sends the full history with each API call
+3. Returns the assistant's response and updates the history
+4. Tracks total tokens used across the entire conversation
+5. Has a `getHistory()` method that returns all messages
+6. Has a `clear()` method that resets the conversation
+
+Then build a simple CLI chat loop that uses your class. The chat should:
+- Display each response
+- Show the running token count after each turn
+- Handle the "quit" command to exit
+- Handle errors gracefully without corrupting the message history
+
+Bonus: Add a `/history` command that prints the full conversation and a `/tokens` command that shows cumulative token usage.

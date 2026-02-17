@@ -1,0 +1,194 @@
+---
+title: "Tool Schemas & Function Definitions"
+description: "Learn what tools and function calling are, how to define them with JSON Schema, and understand the Anthropic Tool type."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 1
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["tools", "function-calling", "json-schema", "anthropic-sdk", "tool-definitions"]
+---
+
+## What You'll Learn
+
+- What "tools" and "function calling" mean in the context of LLMs
+- How to define a tool using JSON Schema
+- The three required fields: `name`, `description`, and `input_schema`
+- How to use the `Anthropic.Tool` type for type-safe definitions
+
+## Key Concepts
+
+### What Are Tools?
+
+Tools (also called "function calling") let an LLM **request** that your code execute a specific function. The LLM does not run the function itself -- it tells you _which_ function to call and _what arguments_ to pass. Your code runs the function and sends the result back.
+
+Think of it like a conversation:
+
+1. **You** say: "What's the weather in Paris?" and provide a list of available tools.
+2. **The LLM** responds: "I'd like to call the `get_weather` tool with `{ city: "Paris" }`."
+3. **Your code** calls the real weather API and gets the result.
+4. **You** send the result back to the LLM.
+5. **The LLM** responds: "The weather in Paris is 18C and sunny."
+
+This is powerful because it lets LLMs interact with the real world -- databases, APIs, file systems, anything your code can reach.
+
+### Defining a Tool with JSON Schema
+
+Every tool needs three things:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+// A single tool definition
+const weatherTool: Anthropic.Tool = {
+  name: "get_weather",
+  description: "Get the current weather for a given city. Returns temperature in Celsius and conditions.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      city: {
+        type: "string",
+        description: "The city name, e.g. 'Paris' or 'New York'",
+      },
+      units: {
+        type: "string",
+        enum: ["celsius", "fahrenheit"],
+        description: "Temperature units. Defaults to celsius.",
+      },
+    },
+    required: ["city"],
+  },
+};
+```
+
+Let's break down each field:
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `name` | A unique identifier the LLM uses to reference the tool | `"get_weather"` |
+| `description` | Tells the LLM **when and why** to use this tool | `"Get the current weather..."` |
+| `input_schema` | A JSON Schema object describing the expected parameters | `{ type: "object", properties: {...} }` |
+
+### The `input_schema` in Detail
+
+The `input_schema` follows the [JSON Schema](https://json-schema.org/) specification. Here are the most common patterns:
+
+```typescript
+// String parameter
+{
+  type: "string",
+  description: "The user's email address",
+}
+
+// Number parameter with constraints
+{
+  type: "number",
+  description: "Number of results to return",
+  minimum: 1,
+  maximum: 100,
+}
+
+// Enum (one of a fixed set of values)
+{
+  type: "string",
+  enum: ["asc", "desc"],
+  description: "Sort order",
+}
+
+// Boolean parameter
+{
+  type: "boolean",
+  description: "Whether to include archived items",
+}
+
+// Array parameter
+{
+  type: "array",
+  items: { type: "string" },
+  description: "List of tags to filter by",
+}
+```
+
+### The `Anthropic.Tool` Type
+
+The Anthropic SDK exports a `Tool` type that gives you autocomplete and type checking:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+// TypeScript will catch errors in your tool definition
+const searchTool: Anthropic.Tool = {
+  name: "search_docs",
+  description: "Search the documentation for a given query.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      query: {
+        type: "string",
+        description: "The search query",
+      },
+      limit: {
+        type: "number",
+        description: "Max results to return (default 5)",
+      },
+    },
+    required: ["query"],
+  },
+};
+```
+
+Note the `as const` on `type: "object"`. This is needed because TypeScript infers `"object"` as a plain `string` type, but the SDK expects the literal `"object"`.
+
+### Organizing Multiple Tool Definitions
+
+A clean pattern is to keep tools in a separate array:
+
+```typescript
+const tools: Anthropic.Tool[] = [
+  {
+    name: "get_weather",
+    description: "Get current weather for a city.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        city: { type: "string", description: "City name" },
+      },
+      required: ["city"],
+    },
+  },
+  {
+    name: "get_time",
+    description: "Get the current time in a given timezone.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        timezone: { type: "string", description: "IANA timezone, e.g. 'America/New_York'" },
+      },
+      required: ["timezone"],
+    },
+  },
+];
+```
+
+## Common Mistakes
+
+1. **Forgetting `as const` on `type: "object"`** -- TypeScript will complain that `string` is not assignable to the expected literal type. Always add `as const`.
+
+2. **Vague descriptions** -- A description like `"Gets data"` gives the LLM no guidance. Be specific: what data, in what format, when should it be used?
+
+3. **Missing `required` array** -- If a parameter is necessary for your function to work, list it in `required`. Otherwise the LLM might omit it.
+
+4. **Overly complex schemas** -- Start simple. Nested objects and complex arrays can confuse the LLM. Flatten your schema when possible.
+
+5. **Using `name` with spaces or special characters** -- Tool names should be alphanumeric with underscores. Use `get_weather`, not `Get Weather!`.
+
+## Your Task
+
+Define a tool called `lookup_contact` that searches a contact database. It should accept:
+
+- `name` (required string) -- the contact name to search for
+- `email` (optional string) -- filter by email domain
+- `limit` (optional number) -- max results, between 1 and 20
+
+Create the tool definition using the `Anthropic.Tool` type with proper descriptions for every field. You do not need to implement the function -- just define the schema.

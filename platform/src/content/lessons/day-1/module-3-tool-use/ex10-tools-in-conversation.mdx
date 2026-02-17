@@ -1,0 +1,263 @@
+---
+title: "Tools in Multi-Turn Conversations"
+description: "Manage tools across multiple conversation turns, handle tool state, and build context-aware tool interactions."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 10
+difficulty: "intermediate"
+estimatedMinutes: 25
+isFree: true
+tags: ["tools", "function-calling", "multi-turn", "conversation", "context", "state-management"]
+---
+
+## What You'll Learn
+
+- How tools work across multiple conversation turns
+- Managing state between tool calls
+- Context management patterns for tools in conversations
+- Building conversational tool interactions that remember previous results
+
+## Key Concepts
+
+### Tools in a Conversation
+
+In a multi-turn conversation, the LLM has access to all previous messages, including previous tool calls and results. This means it can:
+
+1. Reference data from earlier tool calls
+2. Build on previous results
+3. Ask follow-up questions before calling a tool
+4. Combine information from multiple tool calls across turns
+
+```typescript
+// Turn 1: User asks about the weather
+// Claude calls get_weather({ city: "Tokyo" })
+// Result: { temp: 22, conditions: "Sunny" }
+
+// Turn 2: User asks "What about Paris?"
+// Claude knows from context the user is asking about weather
+// Claude calls get_weather({ city: "Paris" })
+// Result: { temp: 15, conditions: "Rainy" }
+
+// Turn 3: User asks "Which one is warmer?"
+// Claude can answer from memory -- no tool call needed!
+// Response: "Tokyo is warmer at 22°C compared to Paris at 15°C."
+```
+
+### Building the Message History
+
+The key to multi-turn tool use is maintaining the full message history correctly:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// This array persists across turns
+const conversationHistory: Anthropic.MessageParam[] = [];
+
+async function chat(userMessage: string): Promise<string> {
+  // Add the user message
+  conversationHistory.push({ role: "user", content: userMessage });
+
+  // Call the API
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools: tools,
+    messages: conversationHistory,
+  });
+
+  // Handle tool use loop
+  while (response.stop_reason === "tool_use") {
+    // Add assistant's response (includes tool_use blocks)
+    conversationHistory.push({
+      role: "assistant",
+      content: response.content,
+    });
+
+    // Execute tools and collect results
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        const result = await executeTool(block.name, block.input);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      }
+    }
+
+    // Add tool results to history
+    conversationHistory.push({ role: "user", content: toolResults });
+
+    // Get next response
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools: tools,
+      messages: conversationHistory,
+    });
+  }
+
+  // Add the final assistant response to history
+  conversationHistory.push({
+    role: "assistant",
+    content: response.content,
+  });
+
+  const text = response.content.find((b) => b.type === "text");
+  return text?.type === "text" ? text.text : "";
+}
+```
+
+### Tool State Across Turns
+
+Sometimes your tools need to share state. For example, a `search_products` tool might return results that a `add_to_cart` tool needs to reference:
+
+```typescript
+// Shared state for the session
+const sessionState = {
+  lastSearchResults: [] as Product[],
+  cart: [] as CartItem[],
+  currentUser: null as User | null,
+};
+
+const toolHandlers: Record<string, (input: any) => Promise<string>> = {
+  search_products: async (input: { query: string }) => {
+    const results = await searchProducts(input.query);
+    // Store results so other tools can reference them
+    sessionState.lastSearchResults = results;
+    return formatProducts(results);
+  },
+
+  add_to_cart: async (input: { product_index: number; quantity: number }) => {
+    const product = sessionState.lastSearchResults[input.product_index - 1];
+    if (!product) {
+      return JSON.stringify({
+        error: "Invalid product index. Please search for products first.",
+      });
+    }
+    sessionState.cart.push({
+      product,
+      quantity: input.quantity,
+    });
+    return JSON.stringify({
+      added: product.name,
+      quantity: input.quantity,
+      cart_total: calculateCartTotal(sessionState.cart),
+    });
+  },
+
+  view_cart: async () => {
+    if (sessionState.cart.length === 0) {
+      return "Your cart is empty.";
+    }
+    return formatCart(sessionState.cart);
+  },
+};
+```
+
+### Context Window Management
+
+As conversations grow, the message history gets large. You need strategies to keep it manageable:
+
+```typescript
+function trimHistory(
+  messages: Anthropic.MessageParam[],
+  maxMessages: number = 20
+): Anthropic.MessageParam[] {
+  if (messages.length <= maxMessages) {
+    return messages;
+  }
+
+  // Always keep the first message (often contains important context)
+  const first = messages[0];
+
+  // Keep the most recent messages
+  const recent = messages.slice(-(maxMessages - 1));
+
+  // Add a summary of trimmed messages
+  const trimmedCount = messages.length - maxMessages;
+  const summaryMessage: Anthropic.MessageParam = {
+    role: "user",
+    content: `[Note: ${trimmedCount} earlier messages were trimmed from this conversation for context management.]`,
+  };
+
+  return [first, summaryMessage, ...recent];
+}
+
+// Use in the chat function
+async function chat(userMessage: string): Promise<string> {
+  conversationHistory.push({ role: "user", content: userMessage });
+
+  // Trim if needed before sending
+  const messagesToSend = trimHistory(conversationHistory);
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools: tools,
+    messages: messagesToSend,
+  });
+
+  // ... rest of the loop
+}
+```
+
+### Interactive Conversation Example
+
+Here is a complete flow showing how a multi-turn conversation with tools looks:
+
+```typescript
+// The conversation object tracks everything
+const conversation = {
+  messages: [] as Anthropic.MessageParam[],
+  state: {
+    searchResults: [] as any[],
+    selectedItem: null as any,
+  },
+};
+
+// Turn 1
+await chat("Find me some good restaurants near Times Square");
+// Claude calls: search_restaurants({ location: "Times Square", type: "restaurant" })
+// Claude responds: "I found 5 restaurants near Times Square: 1. Carmine's..."
+
+// Turn 2
+await chat("Tell me more about the second one");
+// Claude does NOT call a tool -- it references the previous search results
+// Claude responds: "Junior's Restaurant is known for..."
+
+// Turn 3
+await chat("Can you check if they have availability tonight?");
+// Claude calls: check_availability({ restaurant_id: "juniors-123", date: "2024-01-15" })
+// Claude responds: "Junior's has tables available at 7:00 PM and 8:30 PM tonight."
+
+// Turn 4
+await chat("Book the 7 PM slot");
+// Claude calls: make_reservation({ restaurant_id: "juniors-123", time: "19:00", ... })
+// Claude responds: "Your reservation at Junior's is confirmed for 7:00 PM."
+```
+
+## Common Mistakes
+
+1. **Not persisting the full message history** -- Every tool_use and tool_result must be in the history. If you drop them, the LLM loses context about what tools returned.
+
+2. **Mutating message objects** -- Never modify messages after adding them to the history. This can cause inconsistencies. Always create new message objects.
+
+3. **Unbounded history growth** -- Without trimming, a long conversation can exceed the context window. Implement a trimming strategy early.
+
+4. **Losing tool state between turns** -- If `add_to_cart` depends on results from `search_products`, that state must persist. Use a session state object.
+
+5. **Not handling the "no tool needed" case** -- Sometimes the LLM can answer from conversation history without calling a tool. Your code must handle `stop_reason !== "tool_use"` in multi-turn flows.
+
+## Your Task
+
+Build a conversational note-taking assistant with three tools:
+
+- `create_note` -- creates a new note with a title and body
+- `search_notes` -- searches existing notes by keyword
+- `update_note` -- updates an existing note by ID
+
+Implement session state to store notes. The assistant should handle a multi-turn conversation where the user creates a note, searches for it, then updates it. Make sure the conversation history is maintained correctly and tool results from earlier turns are accessible to the LLM in later turns.

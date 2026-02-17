@@ -1,0 +1,577 @@
+---
+title: "A/B Testing: Data-Driven Prompt Decisions"
+description: "Build a full A/B testing framework for prompts with statistical significance, sample sizes, and data-driven decision making."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 20
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["llm", "api", "ab-testing", "statistics", "significance", "experimentation", "data-driven"]
+---
+
+## What You'll Learn
+
+- How to design proper A/B tests for prompts
+- Statistical significance and why it matters
+- Calculating required sample sizes
+- Building an A/B testing framework
+- Making data-driven decisions about prompt changes
+
+## Key Concepts
+
+### Why A/B Test Prompts?
+
+In the previous exercises, you compared prompts by running them on test sets. That works for catching regressions, but it does not tell you whether a change is truly better or just appears better due to random variation. A/B testing adds statistical rigor.
+
+The core question: "Is the difference I'm seeing real, or could it be due to chance?"
+
+```typescript
+// Scenario: You changed a prompt and quality scores improved
+// Old prompt average score: 3.8
+// New prompt average score: 4.1
+
+// Without A/B testing: "Great, the new prompt is better!"
+// With A/B testing: "The improvement is 0.3 points with p=0.03,
+//                    which is statistically significant. We can
+//                    confidently deploy the new prompt."
+```
+
+### A/B Test Design
+
+A proper A/B test has:
+
+1. **Control (A)**: The current prompt version
+2. **Treatment (B)**: The new prompt version
+3. **Metric**: What you are measuring (quality score, accuracy, etc.)
+4. **Sample size**: Enough data points to detect a meaningful difference
+5. **Significance threshold**: Usually p < 0.05 (5% chance the difference is random)
+
+```typescript
+interface ABTestConfig {
+  name: string;
+  controlVersion: string;
+  treatmentVersion: string;
+  metric: string; // What to measure
+  significanceLevel: number; // Usually 0.05
+  minimumSamples: number; // Per variant
+  minimumDetectableEffect: number; // Smallest meaningful difference
+}
+
+interface ABTestSample {
+  variant: "control" | "treatment";
+  input: string;
+  output: string;
+  score: number;
+  metadata?: Record<string, unknown>;
+}
+```
+
+### The A/B Testing Framework
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+class ABTest {
+  private config: ABTestConfig;
+  private samples: ABTestSample[] = [];
+  private startedAt: Date;
+
+  constructor(config: ABTestConfig) {
+    this.config = config;
+    this.startedAt = new Date();
+  }
+
+  addSample(sample: ABTestSample): void {
+    this.samples.push(sample);
+  }
+
+  getControlSamples(): ABTestSample[] {
+    return this.samples.filter((s) => s.variant === "control");
+  }
+
+  getTreatmentSamples(): ABTestSample[] {
+    return this.samples.filter((s) => s.variant === "treatment");
+  }
+
+  // Check if we have enough samples to draw a conclusion
+  hasEnoughSamples(): boolean {
+    return (
+      this.getControlSamples().length >= this.config.minimumSamples &&
+      this.getTreatmentSamples().length >= this.config.minimumSamples
+    );
+  }
+
+  // Calculate basic statistics
+  getStats(samples: ABTestSample[]): {
+    mean: number;
+    stdDev: number;
+    count: number;
+  } {
+    const scores = samples.map((s) => s.score);
+    const count = scores.length;
+    const mean = scores.reduce((s, x) => s + x, 0) / count;
+    const variance =
+      scores.reduce((s, x) => s + Math.pow(x - mean, 2), 0) / (count - 1);
+    const stdDev = Math.sqrt(variance);
+
+    return { mean, stdDev, count };
+  }
+
+  // Two-sample t-test (Welch's t-test)
+  calculateSignificance(): {
+    controlMean: number;
+    treatmentMean: number;
+    difference: number;
+    tStatistic: number;
+    pValue: number;
+    isSignificant: boolean;
+    confidenceInterval: [number, number];
+  } {
+    const controlStats = this.getStats(this.getControlSamples());
+    const treatmentStats = this.getStats(this.getTreatmentSamples());
+
+    const difference = treatmentStats.mean - controlStats.mean;
+
+    // Welch's t-test
+    const se = Math.sqrt(
+      Math.pow(controlStats.stdDev, 2) / controlStats.count +
+        Math.pow(treatmentStats.stdDev, 2) / treatmentStats.count
+    );
+
+    const tStatistic = difference / se;
+
+    // Approximate p-value using normal distribution (for large enough samples)
+    const pValue = 2 * (1 - normalCDF(Math.abs(tStatistic)));
+
+    // 95% confidence interval
+    const marginOfError = 1.96 * se;
+    const confidenceInterval: [number, number] = [
+      difference - marginOfError,
+      difference + marginOfError,
+    ];
+
+    return {
+      controlMean: controlStats.mean,
+      treatmentMean: treatmentStats.mean,
+      difference,
+      tStatistic,
+      pValue,
+      isSignificant: pValue < this.config.significanceLevel,
+      confidenceInterval,
+    };
+  }
+
+  // Get a human-readable report
+  getReport(): string {
+    const controlStats = this.getStats(this.getControlSamples());
+    const treatmentStats = this.getStats(this.getTreatmentSamples());
+    const significance = this.calculateSignificance();
+
+    let report = `=== A/B Test Report: ${this.config.name} ===\n\n`;
+    report += `Started: ${this.startedAt.toISOString()}\n`;
+    report += `Metric: ${this.config.metric}\n`;
+    report += `Significance level: ${this.config.significanceLevel}\n\n`;
+
+    report += `--- Control (${this.config.controlVersion}) ---\n`;
+    report += `  Samples: ${controlStats.count}\n`;
+    report += `  Mean: ${controlStats.mean.toFixed(3)}\n`;
+    report += `  Std Dev: ${controlStats.stdDev.toFixed(3)}\n\n`;
+
+    report += `--- Treatment (${this.config.treatmentVersion}) ---\n`;
+    report += `  Samples: ${treatmentStats.count}\n`;
+    report += `  Mean: ${treatmentStats.mean.toFixed(3)}\n`;
+    report += `  Std Dev: ${treatmentStats.stdDev.toFixed(3)}\n\n`;
+
+    report += `--- Results ---\n`;
+    report += `  Difference: ${significance.difference > 0 ? "+" : ""}${significance.difference.toFixed(3)}\n`;
+    report += `  t-statistic: ${significance.tStatistic.toFixed(3)}\n`;
+    report += `  p-value: ${significance.pValue.toFixed(4)}\n`;
+    report += `  95% CI: [${significance.confidenceInterval[0].toFixed(3)}, ${significance.confidenceInterval[1].toFixed(3)}]\n`;
+    report += `  Significant: ${significance.isSignificant ? "YES" : "NO"}\n\n`;
+
+    if (significance.isSignificant) {
+      if (significance.difference > 0) {
+        report += `Conclusion: Treatment is significantly BETTER than control.\n`;
+        report += `Recommendation: Deploy the treatment version.\n`;
+      } else {
+        report += `Conclusion: Treatment is significantly WORSE than control.\n`;
+        report += `Recommendation: Keep the control version.\n`;
+      }
+    } else {
+      report += `Conclusion: No statistically significant difference detected.\n`;
+      if (!this.hasEnoughSamples()) {
+        report += `Recommendation: Collect more samples (need ${this.config.minimumSamples} per variant).\n`;
+      } else {
+        report += `Recommendation: The change has no meaningful impact. Keep the simpler/cheaper version.\n`;
+      }
+    }
+
+    return report;
+  }
+}
+
+// Normal CDF approximation (for p-value calculation)
+function normalCDF(x: number): number {
+  const a1 = 0.254829592;
+  const a2 = -0.284496736;
+  const a3 = 1.421413741;
+  const a4 = -1.453152027;
+  const a5 = 1.061405429;
+  const p = 0.3275911;
+
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x) / Math.sqrt(2);
+
+  const t = 1.0 / (1.0 + p * x);
+  const y =
+    1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+
+  return 0.5 * (1.0 + sign * y);
+}
+```
+
+### Sample Size Calculation
+
+How many samples do you need? It depends on how small a difference you want to detect:
+
+```typescript
+function calculateSampleSize(config: {
+  minimumDetectableEffect: number; // e.g., 0.3 points on a 5-point scale
+  estimatedStdDev: number; // e.g., 0.8 from historical data
+  significanceLevel: number; // e.g., 0.05
+  power: number; // e.g., 0.80 (80% chance of detecting a real effect)
+}): number {
+  // z-scores for common values
+  const zAlpha = config.significanceLevel === 0.05 ? 1.96 : 2.576; // 0.05 or 0.01
+  const zBeta = config.power === 0.8 ? 0.842 : 1.282; // 0.80 or 0.90
+
+  const n =
+    (2 * Math.pow(config.estimatedStdDev, 2) * Math.pow(zAlpha + zBeta, 2)) /
+    Math.pow(config.minimumDetectableEffect, 2);
+
+  return Math.ceil(n);
+}
+
+// Example:
+const samplesNeeded = calculateSampleSize({
+  minimumDetectableEffect: 0.3, // Want to detect a 0.3 point difference
+  estimatedStdDev: 0.8, // Based on historical score variance
+  significanceLevel: 0.05, // 95% confidence
+  power: 0.8, // 80% power
+});
+
+console.log(`Need ${samplesNeeded} samples per variant`);
+// Typically 50-200 samples depending on effect size and variance
+```
+
+### Running an A/B Test
+
+```typescript
+async function runABTest(
+  controlPrompt: string,
+  treatmentPrompt: string,
+  testInputs: string[],
+  evaluationCriteria: string,
+  config: ABTestConfig
+): Promise<ABTest> {
+  const test = new ABTest(config);
+
+  for (const input of testInputs) {
+    // Run control
+    const controlResponse = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 512,
+      temperature: 0.3,
+      messages: [
+        { role: "user", content: controlPrompt.replace("{{input}}", input) },
+      ],
+    });
+
+    const controlOutput =
+      controlResponse.content[0].type === "text"
+        ? controlResponse.content[0].text
+        : "";
+
+    // Run treatment
+    const treatmentResponse = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 512,
+      temperature: 0.3,
+      messages: [
+        {
+          role: "user",
+          content: treatmentPrompt.replace("{{input}}", input),
+        },
+      ],
+    });
+
+    const treatmentOutput =
+      treatmentResponse.content[0].type === "text"
+        ? treatmentResponse.content[0].text
+        : "";
+
+    // Score both outputs with LLM-as-judge
+    const [controlScore, treatmentScore] = await Promise.all([
+      scoreOutput(input, controlOutput, evaluationCriteria),
+      scoreOutput(input, treatmentOutput, evaluationCriteria),
+    ]);
+
+    test.addSample({
+      variant: "control",
+      input,
+      output: controlOutput,
+      score: controlScore,
+    });
+
+    test.addSample({
+      variant: "treatment",
+      input,
+      output: treatmentOutput,
+      score: treatmentScore,
+    });
+  }
+
+  return test;
+}
+
+async function scoreOutput(
+  input: string,
+  output: string,
+  criteria: string
+): Promise<number> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 50,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Rate this output on a scale of 1-5.
+
+Input: "${input}"
+Output: "${output}"
+Criteria: ${criteria}
+
+Respond with just a number (1-5):`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text.trim() : "3";
+  const score = parseInt(text, 10);
+  return isNaN(score) ? 3 : Math.min(5, Math.max(1, score));
+}
+```
+
+### Multi-Metric A/B Testing
+
+Real applications care about multiple metrics:
+
+```typescript
+interface MultiMetricABResult {
+  metrics: Record<
+    string,
+    {
+      controlMean: number;
+      treatmentMean: number;
+      pValue: number;
+      isSignificant: boolean;
+    }
+  >;
+  overallRecommendation: "deploy" | "keep-control" | "inconclusive";
+}
+
+async function multiMetricTest(
+  controlPrompt: string,
+  treatmentPrompt: string,
+  testInputs: string[]
+): Promise<MultiMetricABResult> {
+  const metrics: Record<string, ABTest> = {
+    quality: new ABTest({
+      name: "quality",
+      controlVersion: "v1",
+      treatmentVersion: "v2",
+      metric: "quality",
+      significanceLevel: 0.05,
+      minimumSamples: 20,
+      minimumDetectableEffect: 0.3,
+    }),
+    conciseness: new ABTest({
+      name: "conciseness",
+      controlVersion: "v1",
+      treatmentVersion: "v2",
+      metric: "conciseness",
+      significanceLevel: 0.05,
+      minimumSamples: 20,
+      minimumDetectableEffect: 0.3,
+    }),
+  };
+
+  for (const input of testInputs) {
+    // Generate outputs
+    const [controlOutput, treatmentOutput] = await Promise.all([
+      generateOutput(controlPrompt, input),
+      generateOutput(treatmentPrompt, input),
+    ]);
+
+    // Score on multiple dimensions
+    const [controlQuality, treatmentQuality] = await Promise.all([
+      scoreOutput(input, controlOutput, "Overall quality and helpfulness"),
+      scoreOutput(input, treatmentOutput, "Overall quality and helpfulness"),
+    ]);
+
+    const [controlConciseness, treatmentConciseness] = await Promise.all([
+      scoreOutput(input, controlOutput, "Conciseness and directness"),
+      scoreOutput(input, treatmentOutput, "Conciseness and directness"),
+    ]);
+
+    metrics.quality.addSample({
+      variant: "control",
+      input,
+      output: controlOutput,
+      score: controlQuality,
+    });
+    metrics.quality.addSample({
+      variant: "treatment",
+      input,
+      output: treatmentOutput,
+      score: treatmentQuality,
+    });
+    metrics.conciseness.addSample({
+      variant: "control",
+      input,
+      output: controlOutput,
+      score: controlConciseness,
+    });
+    metrics.conciseness.addSample({
+      variant: "treatment",
+      input,
+      output: treatmentOutput,
+      score: treatmentConciseness,
+    });
+  }
+
+  // Analyze each metric
+  const results: MultiMetricABResult["metrics"] = {};
+  let significantWins = 0;
+  let significantLosses = 0;
+
+  for (const [name, test] of Object.entries(metrics)) {
+    const sig = test.calculateSignificance();
+    results[name] = {
+      controlMean: sig.controlMean,
+      treatmentMean: sig.treatmentMean,
+      pValue: sig.pValue,
+      isSignificant: sig.isSignificant,
+    };
+
+    if (sig.isSignificant) {
+      if (sig.difference > 0) significantWins++;
+      else significantLosses++;
+    }
+  }
+
+  let recommendation: "deploy" | "keep-control" | "inconclusive";
+  if (significantWins > 0 && significantLosses === 0) {
+    recommendation = "deploy";
+  } else if (significantLosses > 0) {
+    recommendation = "keep-control";
+  } else {
+    recommendation = "inconclusive";
+  }
+
+  return { metrics: results, overallRecommendation: recommendation };
+}
+
+async function generateOutput(prompt: string, input: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 512,
+    temperature: 0.3,
+    messages: [
+      { role: "user", content: prompt.replace("{{input}}", input) },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text : "";
+}
+```
+
+### Making the Decision
+
+```typescript
+function makeDeploymentDecision(testResult: ABTest): {
+  decision: "deploy" | "keep-current" | "need-more-data";
+  reasoning: string;
+} {
+  if (!testResult.hasEnoughSamples()) {
+    return {
+      decision: "need-more-data",
+      reasoning: "Not enough samples to reach a conclusion.",
+    };
+  }
+
+  const sig = testResult.calculateSignificance();
+
+  if (!sig.isSignificant) {
+    return {
+      decision: "keep-current",
+      reasoning: `No significant difference (p=${sig.pValue.toFixed(3)}). The change does not improve quality. Keep the current version.`,
+    };
+  }
+
+  if (sig.difference > 0) {
+    return {
+      decision: "deploy",
+      reasoning: `Significant improvement of ${sig.difference.toFixed(3)} points (p=${sig.pValue.toFixed(3)}). Deploy the new version.`,
+    };
+  }
+
+  return {
+    decision: "keep-current",
+    reasoning: `Significant regression of ${sig.difference.toFixed(3)} points (p=${sig.pValue.toFixed(3)}). Do not deploy.`,
+  };
+}
+```
+
+## Common Mistakes
+
+1. **Stopping the test too early**: If you see a promising result after 10 samples and stop, you are likely seeing random noise. Always collect the pre-calculated minimum sample size before drawing conclusions.
+
+2. **Ignoring statistical significance**: A 0.1 point improvement might be real or it might be noise. Without a p-value, you cannot tell. Never deploy based on "it looks a little better" -- demand statistical evidence.
+
+3. **Testing too many variants at once**: Each additional variant requires more samples. Start with A vs B. If you need to test 5 variants, run sequential A/B tests or use more advanced statistical methods.
+
+4. **Using the same data for development and testing**: If you tuned your prompt to score well on specific inputs, those inputs cannot be your A/B test data. Use separate datasets for development and evaluation.
+
+5. **Not considering practical significance**: A statistically significant improvement of 0.01 points on a 5-point scale is real but meaningless. Define the minimum effect size that would justify the change before running the test.
+
+## Your Task
+
+Build a complete A/B testing framework that:
+
+1. Implements the `ABTest` class with sample collection and statistical analysis
+2. Calculates required sample sizes given effect size and significance level
+3. Implements Welch's t-test for comparing two variants
+4. Provides clear pass/fail decisions with confidence intervals
+5. Generates a human-readable report
+6. Includes a sample size calculator
+
+Run an A/B test comparing two versions of a prompt:
+- **Control**: A basic prompt for a task (e.g., "Explain this concept")
+- **Treatment**: An improved prompt (e.g., with structured instructions and examples)
+- Collect at least 15 samples per variant (use a diverse set of test inputs)
+- Use LLM-as-judge to score each output
+- Print the full A/B test report with statistical analysis
+
+The report should clearly show:
+- Sample sizes and means for both variants
+- The t-statistic and p-value
+- The 95% confidence interval
+- A clear recommendation (deploy/keep/need more data)
+
+Bonus: Run a multi-metric A/B test that evaluates both quality and conciseness simultaneously, and show how to handle the case where one metric improves while another regresses.

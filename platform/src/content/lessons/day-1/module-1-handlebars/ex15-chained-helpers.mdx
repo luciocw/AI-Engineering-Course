@@ -1,0 +1,223 @@
+---
+title: "Chained Helpers"
+description: "Using subexpressions for pipe-like composition and building formatters that chain together."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 15
+difficulty: "advanced"
+estimatedMinutes: 20
+isFree: true
+tags: ["handlebars", "templates", "subexpressions", "composition", "chaining", "formatters"]
+---
+
+## What You'll Learn
+
+You will learn how to use Handlebars subexpressions to chain helpers together in a pipe-like pattern, compose complex transformations from simple building blocks, and build a library of composable formatters.
+
+## Key Concepts
+
+### Subexpressions: Helpers Inside Helpers
+
+You briefly saw subexpressions in Exercise 13 with `{{#if (eq role "admin")}}`. A subexpression is a helper call wrapped in parentheses `()` that can be used anywhere a value is expected -- including as an argument to another helper:
+
+```typescript
+import Handlebars from "handlebars";
+
+Handlebars.registerHelper("uppercase", function (str: string) {
+  return typeof str === "string" ? str.toUpperCase() : "";
+});
+
+Handlebars.registerHelper("exclaim", function (str: string) {
+  return typeof str === "string" ? str + "!!!" : "";
+});
+
+// Chain: first uppercase, then exclaim
+const template = Handlebars.compile("{{exclaim (uppercase name)}}");
+const result = template({ name: "hello" });
+// "HELLO!!!"
+```
+
+The inner subexpression `(uppercase name)` runs first, producing `"HELLO"`. That result is then passed as the argument to `exclaim`, producing `"HELLO!!!"`.
+
+### Reading Order: Inside-Out
+
+Subexpressions evaluate from the inside out, like nested function calls in JavaScript:
+
+```typescript
+// Handlebars:  {{c (b (a value))}}
+// Equivalent:  c(b(a(value)))
+
+Handlebars.registerHelper("trim", function (str: string) {
+  return typeof str === "string" ? str.trim() : "";
+});
+
+Handlebars.registerHelper("lowercase", function (str: string) {
+  return typeof str === "string" ? str.toLowerCase() : "";
+});
+
+Handlebars.registerHelper("slugify", function (str: string) {
+  return typeof str === "string" ? str.replace(/\s+/g, "-") : "";
+});
+
+const template = Handlebars.compile(
+  "URL: /posts/{{slugify (lowercase (trim title))}}"
+);
+const result = template({ title: "  Hello World Post  " });
+// "URL: /posts/hello-world-post"
+```
+
+The execution order is: `trim` removes whitespace, then `lowercase` converts to lowercase, then `slugify` replaces spaces with hyphens.
+
+### Building a Composable Formatter Library
+
+The real power of chaining is building small, focused helpers that combine into complex transformations. Each helper does one thing:
+
+```typescript
+// String helpers
+Handlebars.registerHelper("trim", (s: string) =>
+  typeof s === "string" ? s.trim() : ""
+);
+
+Handlebars.registerHelper("lowercase", (s: string) =>
+  typeof s === "string" ? s.toLowerCase() : ""
+);
+
+Handlebars.registerHelper("uppercase", (s: string) =>
+  typeof s === "string" ? s.toUpperCase() : ""
+);
+
+Handlebars.registerHelper("capitalize", (s: string) => {
+  if (typeof s !== "string" || s.length === 0) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+});
+
+Handlebars.registerHelper("truncate", (s: string, len: number) => {
+  if (typeof s !== "string") return "";
+  return s.length <= len ? s : s.substring(0, len) + "...";
+});
+
+Handlebars.registerHelper("replace", (s: string, find: string, rep: string) => {
+  if (typeof s !== "string") return "";
+  return s.split(find).join(rep);
+});
+
+// Number helpers
+Handlebars.registerHelper("round", (n: number) =>
+  typeof n === "number" ? Math.round(n) : 0
+);
+
+Handlebars.registerHelper("fixed", (n: number, decimals: number) =>
+  typeof n === "number" ? n.toFixed(decimals) : "0"
+);
+
+Handlebars.registerHelper("prefix", (s: any, pre: string) =>
+  pre + String(s)
+);
+```
+
+Now you can compose them freely:
+
+```typescript
+const template = Handlebars.compile(`
+Name: {{capitalize (lowercase name)}}
+Price: {{prefix (fixed price 2) "$"}}
+Slug: {{slugify (lowercase (trim title))}}
+Preview: {{truncate (trim description) 80}}
+`);
+```
+
+Each line chains two or three small helpers. No single helper is complex, but together they handle sophisticated formatting.
+
+### Subexpressions with Multiple Arguments
+
+Helpers that take multiple arguments work seamlessly in subexpressions. The subexpression result becomes one of the arguments:
+
+```typescript
+Handlebars.registerHelper("join", function (arr: string[], separator: string) {
+  if (!Array.isArray(arr)) return "";
+  return arr.join(separator);
+});
+
+Handlebars.registerHelper("wrap", function (str: string, before: string, after: string) {
+  return before + str + after;
+});
+
+const template = Handlebars.compile(
+  '{{wrap (join tags ", ") "[" "]"}}'
+);
+const result = template({ tags: ["AI", "templates", "Handlebars"] });
+// "[AI, templates, Handlebars]"
+```
+
+The `(join tags ", ")` produces `"AI, templates, Handlebars"`, and `wrap` surrounds it with brackets.
+
+### Chaining in AI Engineering
+
+Composable helpers are invaluable for prompt preprocessing:
+
+```typescript
+Handlebars.registerHelper("sanitize", (s: string) => {
+  if (typeof s !== "string") return "";
+  // Remove potential prompt injection patterns
+  return s.replace(/\b(ignore|forget|disregard)\s+(previous|above|all)\b/gi, "[filtered]");
+});
+
+Handlebars.registerHelper("wordLimit", (s: string, max: number) => {
+  if (typeof s !== "string") return "";
+  const words = s.split(/\s+/);
+  return words.length <= max ? s : words.slice(0, max).join(" ") + "...";
+});
+
+Handlebars.registerHelper("indent", (s: string, spaces: number) => {
+  if (typeof s !== "string") return "";
+  const pad = " ".repeat(spaces);
+  return s.split("\n").map(line => pad + line).join("\n");
+});
+
+const template = Handlebars.compile(`
+Analyze the user's input below:
+
+{{indent (wordLimit (sanitize (trim userInput)) 200) 2}}
+
+Provide a structured response.
+`);
+```
+
+This chain: trims whitespace, sanitizes potential injection patterns, limits to 200 words, then indents the result by 2 spaces. Each step is independently testable and reusable.
+
+### When Chaining Gets Too Complex
+
+If a subexpression chain has more than three or four levels of nesting, it becomes hard to read:
+
+```typescript
+// Too complex -- hard to follow
+{{format (prefix (fixed (round (multiply price taxRate)) 2) "$") "bold"}}
+```
+
+At this point, create a dedicated helper that combines the steps:
+
+```typescript
+Handlebars.registerHelper(
+  "formatPrice",
+  function (price: number, taxRate: number) {
+    const total = Math.round(price * taxRate * 100) / 100;
+    return "$" + total.toFixed(2);
+  }
+);
+
+// Clean and readable
+{{formatPrice price taxRate}}
+```
+
+Use chaining for two-to-three-step compositions. For longer pipelines, create a purpose-built helper.
+
+## Common Mistakes
+
+- **Forgetting parentheses around subexpressions.** `{{uppercase lowercase name}}` passes `lowercase` as a literal string argument to `uppercase`. You need `{{uppercase (lowercase name)}}` to call `lowercase` first.
+- **Nesting too many subexpressions.** More than three levels deep is hard to read and debug. Create a combined helper instead.
+- **Assuming helpers chain left-to-right.** Subexpressions evaluate inside-out, like nested function calls. `{{a (b (c val))}}` runs `c` first, then `b`, then `a`.
+- **Not handling edge cases in each helper.** Every helper in the chain should handle `undefined`, `null`, and wrong types gracefully. One broken link in the chain breaks the entire expression.
+
+## Your Task
+
+Build a library of at least four small, composable helpers. Then create a template that chains them together using subexpressions to perform a multi-step transformation on a string value. Demonstrate at least one chain that is three helpers deep.

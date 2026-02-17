@@ -1,0 +1,403 @@
+---
+title: "Handlebars Integration: Dynamic Prompt Generation"
+description: "Combine Module 1 Handlebars templates with Module 2 API calls for dynamic prompt generation and template-driven workflows."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 9
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["llm", "api", "handlebars", "templates", "dynamic-prompts", "integration", "workflow"]
+---
+
+## What You'll Learn
+
+- How to combine Handlebars templates with LLM API calls
+- Building dynamic prompt generation systems
+- Template-driven workflows for consistent AI interactions
+- Patterns for managing complex, data-driven prompts
+
+## Key Concepts
+
+### Why Templates + LLM APIs?
+
+In Module 1, you learned to build dynamic templates with Handlebars. In Module 2, you have been making LLM API calls. Now we combine them. The result is a system where your prompts are not hardcoded strings but dynamic, data-driven templates.
+
+This matters because real applications need prompts that:
+- Vary based on user data
+- Include different sections conditionally
+- Scale across many similar but distinct use cases
+- Are maintainable and testable
+
+```typescript
+// Without templates: messy string concatenation
+const prompt = `Analyze this ${type} for ${userName}. ` +
+  (includeHistory ? `Their history: ${history}. ` : "") +
+  `Focus on ${focusAreas.join(", ")}. ` +
+  `Output as ${format}.`;
+
+// With templates: clean, readable, maintainable
+const template = `Analyze this {{type}} for {{userName}}.
+{{#if includeHistory}}
+Their history: {{history}}.
+{{/if}}
+Focus on {{#each focusAreas}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}.
+Output as {{format}}.`;
+```
+
+### Setting Up Handlebars with LLM Calls
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import Handlebars from "handlebars";
+
+const client = new Anthropic();
+
+// Step 1: Define your template
+const analysisTemplate = Handlebars.compile(`You are a {{role}} assistant.
+
+<task>
+Analyze the following {{contentType}} and provide actionable feedback.
+</task>
+
+<context>
+{{#if userLevel}}
+The user's experience level is: {{userLevel}}
+{{/if}}
+{{#if previousFeedback}}
+Previous feedback given: {{previousFeedback}}
+{{/if}}
+</context>
+
+<rules>
+{{#each rules}}
+- {{this}}
+{{/each}}
+</rules>
+
+<content>
+{{content}}
+</content>
+
+<output_format>
+{{outputFormat}}
+</output_format>`);
+
+// Step 2: Compile the template with data
+const prompt = analysisTemplate({
+  role: "code review",
+  contentType: "TypeScript function",
+  userLevel: "intermediate",
+  previousFeedback: null, // This section will be omitted
+  rules: [
+    "Focus on type safety",
+    "Check for error handling",
+    "Suggest performance improvements",
+  ],
+  content: `function fetchUser(id: string) {
+    return fetch('/api/users/' + id).then(r => r.json());
+  }`,
+  outputFormat: "JSON with fields: issues[], suggestions[], overallScore (1-10)",
+});
+
+// Step 3: Send the compiled prompt to the LLM
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  temperature: 0,
+  messages: [{ role: "user", content: prompt }],
+});
+```
+
+### Building a Template-Driven Prompt System
+
+Create a system that manages prompt templates as reusable assets:
+
+```typescript
+import Handlebars from "handlebars";
+
+interface PromptTemplate {
+  name: string;
+  systemTemplate: string;
+  userTemplate: string;
+  defaults: Record<string, unknown>;
+}
+
+class PromptEngine {
+  private templates: Map<
+    string,
+    {
+      system: HandlebarsTemplateDelegate;
+      user: HandlebarsTemplateDelegate;
+      defaults: Record<string, unknown>;
+    }
+  > = new Map();
+
+  registerTemplate(config: PromptTemplate): void {
+    this.templates.set(config.name, {
+      system: Handlebars.compile(config.systemTemplate),
+      user: Handlebars.compile(config.userTemplate),
+      defaults: config.defaults,
+    });
+  }
+
+  render(
+    templateName: string,
+    data: Record<string, unknown>
+  ): { system: string; user: string } {
+    const template = this.templates.get(templateName);
+    if (!template) {
+      throw new Error(`Template "${templateName}" not found`);
+    }
+
+    // Merge defaults with provided data
+    const mergedData = { ...template.defaults, ...data };
+
+    return {
+      system: template.system(mergedData),
+      user: template.user(mergedData),
+    };
+  }
+
+  listTemplates(): string[] {
+    return Array.from(this.templates.keys());
+  }
+}
+```
+
+Register templates for different use cases:
+
+```typescript
+const engine = new PromptEngine();
+
+// Register a customer support template
+engine.registerTemplate({
+  name: "customer-support",
+  systemTemplate: `You are a {{companyName}} customer support agent.
+
+Tone: {{tone}}
+Language: {{language}}
+
+{{#if knowledgeBase}}
+Reference information:
+{{#each knowledgeBase}}
+- {{this.topic}}: {{this.answer}}
+{{/each}}
+{{/if}}
+
+Rules:
+- Always greet the customer by name if provided
+- Offer to escalate if the issue is not resolved in 2 exchanges
+- Never make promises about timelines unless confirmed`,
+
+  userTemplate: `{{#if customerName}}Customer name: {{customerName}}{{/if}}
+{{#if accountType}}Account type: {{accountType}}{{/if}}
+{{#if previousTickets}}
+Previous tickets:
+{{#each previousTickets}}
+- [{{this.date}}] {{this.summary}} ({{this.status}})
+{{/each}}
+{{/if}}
+
+Customer message: {{message}}`,
+
+  defaults: {
+    companyName: "Acme Inc",
+    tone: "friendly and professional",
+    language: "English",
+    knowledgeBase: [],
+  },
+});
+
+// Register a code review template
+engine.registerTemplate({
+  name: "code-review",
+  systemTemplate: `You are a senior {{language}} developer performing code reviews.
+
+Focus areas:
+{{#each focusAreas}}
+- {{this}}
+{{/each}}
+
+Severity levels: critical, warning, suggestion
+Always provide the line number when referencing issues.`,
+
+  userTemplate: `Review this {{language}} code:
+
+\`\`\`{{language}}
+{{code}}
+\`\`\`
+
+{{#if prDescription}}
+PR Description: {{prDescription}}
+{{/if}}
+
+{{#if changedFiles}}
+Other changed files in this PR: {{#each changedFiles}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}
+{{/if}}`,
+
+  defaults: {
+    language: "TypeScript",
+    focusAreas: [
+      "Type safety",
+      "Error handling",
+      "Performance",
+      "Security",
+    ],
+  },
+});
+```
+
+### Using Templates with the API
+
+```typescript
+async function callWithTemplate(
+  engine: PromptEngine,
+  templateName: string,
+  data: Record<string, unknown>,
+  model: string = "claude-sonnet-4-20250514"
+): Promise<string> {
+  const { system, user } = engine.render(templateName, data);
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 1024,
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text : "";
+}
+
+// Usage
+const supportResponse = await callWithTemplate(engine, "customer-support", {
+  customerName: "Sarah",
+  accountType: "premium",
+  message: "My export feature has been broken for two days!",
+  previousTickets: [
+    {
+      date: "2024-01-10",
+      summary: "Export timeout issue",
+      status: "resolved",
+    },
+  ],
+});
+
+const reviewResponse = await callWithTemplate(engine, "code-review", {
+  code: `async function getUsers() {
+  const res = await fetch("/api/users");
+  const data = await res.json();
+  return data;
+}`,
+  prDescription: "Add user listing endpoint",
+});
+```
+
+### Custom Handlebars Helpers for Prompts
+
+Create helpers specifically useful for prompt engineering:
+
+```typescript
+// Truncate long text to fit context windows
+Handlebars.registerHelper("truncate", function (text: string, maxLength: number) {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + "... [truncated]";
+});
+
+// Format arrays as numbered lists
+Handlebars.registerHelper("numberedList", function (items: string[]) {
+  return items.map((item, i) => `${i + 1}. ${item}`).join("\n");
+});
+
+// Conditionally include XML tags
+Handlebars.registerHelper("xmlSection", function (tag: string, options: any) {
+  const content = options.fn(this);
+  if (content.trim()) {
+    return `<${tag}>\n${content}</${tag}>`;
+  }
+  return "";
+});
+
+// Estimate token count for a section
+Handlebars.registerHelper("tokenEstimate", function (text: string) {
+  return Math.ceil(text.length / 4);
+});
+
+// Usage in templates
+const advancedTemplate = Handlebars.compile(`
+{{#xmlSection "context"}}
+{{truncate backgroundInfo 500}}
+{{/xmlSection}}
+
+{{#xmlSection "examples"}}
+{{numberedList examples}}
+{{/xmlSection}}
+
+Analyze the input and respond accordingly.
+
+<input>
+{{input}}
+</input>
+`);
+```
+
+### Template-Driven Workflows
+
+Chain multiple templates together for multi-step processes:
+
+```typescript
+async function templateWorkflow(inputData: Record<string, unknown>) {
+  // Step 1: Classify the input
+  const classification = await callWithTemplate(engine, "classifier", {
+    input: inputData.text,
+    categories: ["bug-report", "feature-request", "question"],
+  });
+
+  // Step 2: Route to the appropriate template based on classification
+  const templateMap: Record<string, string> = {
+    "bug-report": "bug-triage",
+    "feature-request": "feature-analysis",
+    question: "knowledge-lookup",
+  };
+
+  const targetTemplate = templateMap[classification.trim()] ?? "general-response";
+
+  // Step 3: Process with the specialized template
+  const result = await callWithTemplate(engine, targetTemplate, {
+    ...inputData,
+    classification,
+  });
+
+  return result;
+}
+```
+
+## Common Mistakes
+
+1. **Hardcoding prompts instead of using templates**: Once you have more than 2-3 prompts, managing them as raw strings becomes unmaintainable. Templates make prompts testable, version-controllable, and reusable.
+
+2. **Not escaping user input in templates**: Handlebars escapes HTML by default, but for prompts you typically want the raw text. Use triple braces `{{{rawContent}}}` when you need unescaped content, but be aware that user input could contain strings that look like prompt instructions.
+
+3. **Overly complex templates**: If your template has 5+ levels of nesting or dozens of conditionals, consider splitting it into multiple simpler templates that compose together.
+
+4. **Not testing templates with edge cases**: Empty arrays, null values, extremely long strings -- test all of these. A template that produces `undefined` in the prompt will confuse the model.
+
+5. **Forgetting defaults**: Templates without defaults require every caller to provide every field. Use sensible defaults so templates are easy to use out of the box.
+
+## Your Task
+
+Build a `PromptEngine` that:
+
+1. Manages a collection of Handlebars templates for different use cases
+2. Supports system prompt templates and user message templates separately
+3. Has default values that can be overridden
+4. Includes at least 2 custom Handlebars helpers useful for prompt engineering
+
+Create these templates and use them with the LLM API:
+- A **product description generator** that takes product details and target audience
+- A **meeting notes summarizer** that takes raw notes and generates structured summaries
+- A **code documentation generator** that takes a code snippet and generates JSDoc comments
+
+Test each template with sample data and verify the LLM produces good output.
+
+Bonus: Add template validation that warns if a rendered prompt is likely to exceed a given token limit.

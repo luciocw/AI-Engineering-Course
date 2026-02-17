@@ -1,0 +1,153 @@
+---
+title: "Nested Properties"
+description: "Accessing nested object properties with dot-notation in Handlebars templates."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 3
+difficulty: "beginner"
+estimatedMinutes: 10
+isFree: true
+tags: ["handlebars", "templates", "nested-objects", "dot-notation", "data-access"]
+---
+
+## What You'll Learn
+
+You will learn how to access nested object properties using dot-notation in Handlebars templates, understand what happens when properties are missing, and see how deeply nested data structures map to template expressions.
+
+## Key Concepts
+
+### Dot-Notation for Nested Objects
+
+Real-world data is rarely flat. User profiles have addresses, orders have line items, and API responses have deeply nested structures. Handlebars lets you reach into nested objects using dot-notation, just like JavaScript:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(
+  "{{user.name}} lives in {{user.address.city}}, {{user.address.country}}."
+);
+
+const result = template({
+  user: {
+    name: "Alice",
+    address: {
+      city: "San Francisco",
+      country: "USA",
+    },
+  },
+});
+// "Alice lives in San Francisco, USA."
+```
+
+Each dot steps one level deeper into the object. `{{user.name}}` means "look up `user` in the context, then look up `name` on that object."
+
+### How Deep Can You Go?
+
+There is no practical limit to nesting depth. You can chain as many dots as your data structure requires:
+
+```typescript
+const template = Handlebars.compile(
+  "Model: {{config.model.provider.settings.modelName}}"
+);
+
+const result = template({
+  config: {
+    model: {
+      provider: {
+        settings: {
+          modelName: "gpt-4",
+        },
+      },
+    },
+  },
+});
+// "Model: gpt-4"
+```
+
+However, deeply nested paths are harder to read and more fragile. If any link in the chain is missing, the whole expression resolves to an empty string.
+
+### What Happens When Properties Are Missing
+
+Handlebars does not throw an error when a property is missing. Instead, it silently returns an empty string:
+
+```typescript
+const template = Handlebars.compile(
+  "Name: {{user.name}}, Email: {{user.email}}"
+);
+
+// The user object exists but has no "email" property
+const result = template({
+  user: { name: "Bob" },
+});
+// "Name: Bob, Email: "
+```
+
+This also applies when an intermediate object in the chain is missing:
+
+```typescript
+const template = Handlebars.compile("City: {{user.address.city}}");
+
+// The user object has no "address" property at all
+const result = template({
+  user: { name: "Bob" },
+});
+// "City: "
+```
+
+Handlebars tries to look up `address` on the `user` object, gets `undefined`, and then tries to look up `city` on `undefined`. Instead of crashing, it returns an empty string. This is forgiving but can hide bugs.
+
+### Nested Data in AI Engineering
+
+When working with AI APIs, you often deal with nested response objects. For example, you might build a prompt that references structured data:
+
+```typescript
+const template = Handlebars.compile(
+  `Analyze this customer:
+Name: {{customer.profile.fullName}}
+Tier: {{customer.subscription.tier}}
+Last Active: {{customer.activity.lastLogin}}
+Support Tickets: {{customer.support.openTickets}}`
+);
+
+const prompt = template({
+  customer: {
+    profile: { fullName: "Carol Davis" },
+    subscription: { tier: "Enterprise" },
+    activity: { lastLogin: "2024-01-15" },
+    support: { openTickets: 3 },
+  },
+});
+```
+
+This pattern appears everywhere: pulling fields from a database record, an API response, or a user session to construct a prompt.
+
+### Mixing Flat and Nested Properties
+
+You can freely mix top-level and nested properties in the same template:
+
+```typescript
+const template = Handlebars.compile(
+  "{{greeting}}, {{user.name}}! Your account ({{user.account.id}}) is {{status}}."
+);
+
+const result = template({
+  greeting: "Welcome back",
+  status: "active",
+  user: {
+    name: "Dana",
+    account: { id: "ACC-9876" },
+  },
+});
+// "Welcome back, Dana! Your account (ACC-9876) is active."
+```
+
+## Common Mistakes
+
+- **Assuming missing properties cause errors.** They do not. Handlebars silently returns an empty string, which can produce broken-looking output without any warning. Always validate your data before passing it to a template if correctness matters.
+- **Forgetting to nest the context object.** If your template says `{{user.name}}` but your context is `{ name: "Alice" }`, Handlebars cannot find `user` at the top level and returns an empty string. Your context structure must match your template paths.
+- **Confusing dot-notation with bracket notation.** Handlebars only supports dot-notation (`{{a.b.c}}`). You cannot use bracket syntax like `{{a["b"]}}` as you would in JavaScript.
+- **Over-nesting your data.** Just because you can access `{{a.b.c.d.e}}` does not mean you should. Flatten your data where possible to keep templates readable.
+
+## Your Task
+
+Create a template that accesses properties at multiple levels of nesting from a structured data object. Include at least one deeply nested path (three or more levels) and verify the output is correct. Also test what happens when one of the intermediate properties is missing.

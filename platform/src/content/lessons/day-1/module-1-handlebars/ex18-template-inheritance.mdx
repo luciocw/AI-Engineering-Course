@@ -1,0 +1,307 @@
+---
+title: "Template Inheritance"
+description: "Using @partial-block for slot-based composition, base templates with overridable sections, and layout patterns."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 18
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["handlebars", "templates", "inheritance", "partial-block", "slots", "layouts", "composition"]
+---
+
+## What You'll Learn
+
+You will learn how to use `@partial-block` to create slot-based template composition, build base templates with overridable sections, and apply layout patterns that keep your prompt templates DRY (Don't Repeat Yourself).
+
+## Key Concepts
+
+### The Problem: Repeated Structure
+
+When building multiple prompt templates, you often repeat the same structure -- a system instruction header, a formatting section, and a closing instruction. Copy-pasting this structure across templates creates maintenance problems: change one thing and you must update every template.
+
+```typescript
+// Template 1: Summarizer
+`You are a helpful assistant.
+Respond in {{language}}.
+
+Summarize the following text:
+{{content}}
+
+Keep your response under {{maxWords}} words.`
+
+// Template 2: Translator
+`You are a helpful assistant.
+Respond in {{language}}.
+
+Translate the following text to {{targetLang}}:
+{{content}}
+
+Maintain the original tone and meaning.`
+```
+
+The header and some instructions are identical. Template inheritance lets you define this shared structure once.
+
+### What Is `@partial-block`?
+
+When you include a partial using the block syntax `{{#> partialName}}...{{/partialName}}`, the content between the tags is called the "partial block." Inside the partial, `{{> @partial-block}}` renders that content. Think of it as a slot that child content fills:
+
+```typescript
+import Handlebars from "handlebars";
+
+// Register a "layout" partial with a slot
+Handlebars.registerPartial(
+  "page",
+  `<header>My App</header>
+<main>
+{{> @partial-block}}
+</main>
+<footer>Copyright 2024</footer>`
+);
+
+// Use the layout and fill the slot
+const template = Handlebars.compile(`
+{{#> page}}
+  <h1>Welcome, {{name}}!</h1>
+  <p>This is the home page content.</p>
+{{/page}}
+`);
+
+const result = template({ name: "Alice" });
+// "<header>My App</header>"
+// "<main>"
+// "  <h1>Welcome, Alice!</h1>"
+// "  <p>This is the home page content.</p>"
+// "</main>"
+// "<footer>Copyright 2024</footer>"
+```
+
+The partial defines the wrapper structure. The calling template provides the content that fills `{{> @partial-block}}`.
+
+### Building a Base Prompt Layout
+
+This pattern is powerful for AI prompt templates:
+
+```typescript
+Handlebars.registerPartial(
+  "promptLayout",
+  `You are a {{role}} assistant.
+{{#if language}}Respond in {{language}}.{{/if}}
+{{#if tone}}Use a {{tone}} tone.{{/if}}
+
+{{> @partial-block}}
+
+{{#if outputFormat}}
+Format your response as {{outputFormat}}.
+{{/if}}`
+);
+
+// Summarizer uses the layout
+const summarizerTemplate = Handlebars.compile(`
+{{#> promptLayout}}
+Summarize the following text in {{maxWords}} words or fewer:
+
+{{content}}
+{{/promptLayout}}
+`);
+
+// Translator uses the same layout
+const translatorTemplate = Handlebars.compile(`
+{{#> promptLayout}}
+Translate the following text to {{targetLang}}:
+
+{{content}}
+
+Maintain the original meaning and tone.
+{{/promptLayout}}
+`);
+
+// Both templates share the same header and footer structure
+const summary = summarizerTemplate({
+  role: "summarization",
+  language: "English",
+  tone: "professional",
+  outputFormat: "bullet points",
+  maxWords: 100,
+  content: "Long article text here...",
+});
+
+const translation = translatorTemplate({
+  role: "translation",
+  language: "Spanish",
+  targetLang: "French",
+  content: "Text to translate...",
+});
+```
+
+Both templates inherit the system role, language preference, tone, and output format instructions from the layout. Only the task-specific content differs.
+
+### Multiple Slots with Named Partials
+
+For more complex layouts with multiple overridable sections, combine `@partial-block` with inline partials:
+
+```typescript
+Handlebars.registerPartial(
+  "advancedLayout",
+  `{{#> systemSection}}You are a helpful assistant.{{/systemSection}}
+
+{{> @partial-block}}
+
+{{#> closingSection}}Respond concisely.{{/closingSection}}`
+);
+
+// The trick: register inline partials to override defaults
+const template = Handlebars.compile(`
+{{#*inline "systemSection"}}
+You are an expert {{domain}} analyst with {{yearsExp}} years of experience.
+{{/inline}}
+
+{{#*inline "closingSection"}}
+Provide your analysis in exactly 3 bullet points.
+{{/inline}}
+
+{{#> advancedLayout}}
+Analyze the following data:
+{{#each dataPoints}}
+- {{this.label}}: {{this.value}}
+{{/each}}
+{{/advancedLayout}}
+`);
+
+const result = template({
+  domain: "financial",
+  yearsExp: 15,
+  dataPoints: [
+    { label: "Revenue", value: "$5.2M" },
+    { label: "Growth", value: "12%" },
+    { label: "Churn", value: "3.5%" },
+  ],
+});
+```
+
+The `{{#*inline "systemSection"}}` defines a local partial that overrides the default content of the `systemSection` slot. If you do not define an inline override, the default content from the layout is used.
+
+### Default Content for Slots
+
+The `@partial-block` slot can have default content that is used when no block content is provided:
+
+```typescript
+Handlebars.registerPartial(
+  "card",
+  `--- Card ---
+Title: {{title}}
+Body:
+{{#> @partial-block}}
+No content provided.
+{{/@partial-block}}
+------------`
+);
+
+// With content
+const withContent = Handlebars.compile(`
+{{#> card}}
+Custom card body for {{name}}.
+{{/card}}
+`);
+
+// Without block content (uses partial's default)
+const withoutContent = Handlebars.compile(`
+{{> card}}
+`);
+```
+
+Note: the default content pattern for `@partial-block` works when the block caller does not provide inner content.
+
+### Nested Layouts
+
+Layouts can themselves use other layouts, creating an inheritance chain:
+
+```typescript
+// Base layout
+Handlebars.registerPartial(
+  "basePrompt",
+  `{{> @partial-block}}
+
+Always respond in valid JSON.`
+);
+
+// Extended layout that uses the base
+Handlebars.registerPartial(
+  "analysisPrompt",
+  `{{#> basePrompt}}
+You are a data analysis assistant.
+Confidence threshold: {{confidenceLevel}}.
+
+{{> @partial-block}}
+{{/basePrompt}}`
+);
+
+// Final template using the extended layout
+const template = Handlebars.compile(`
+{{#> analysisPrompt}}
+Analyze the sentiment of this text: {{text}}
+{{/analysisPrompt}}
+`);
+
+const result = template({
+  confidenceLevel: 0.85,
+  text: "I really enjoyed this product!",
+});
+// "You are a data analysis assistant."
+// "Confidence threshold: 0.85."
+// ""
+// "Analyze the sentiment of this text: I really enjoyed this product!"
+// ""
+// "Always respond in valid JSON."
+```
+
+The `basePrompt` adds the JSON instruction at the bottom. The `analysisPrompt` adds the role and confidence level. The final template adds the specific task. Each layer adds its piece.
+
+### Layout Patterns in AI Engineering
+
+Template inheritance maps perfectly to prompt engineering patterns:
+
+```typescript
+// Level 1: Universal base (applies to all prompts)
+Handlebars.registerPartial("universalBase", `
+{{> @partial-block}}
+
+Important: Do not make up information. If unsure, say "I don't know."
+`);
+
+// Level 2: Task-specific base (applies to all classification tasks)
+Handlebars.registerPartial("classificationBase", `
+{{#> universalBase}}
+You are a text classification assistant.
+Available categories: {{categories}}
+
+{{> @partial-block}}
+
+Respond with ONLY the category name, nothing else.
+{{/universalBase}}
+`);
+
+// Level 3: Specific use case
+const sentimentClassifier = Handlebars.compile(`
+{{#> classificationBase}}
+Classify the sentiment of this customer review:
+"{{review}}"
+{{/classificationBase}}
+`);
+```
+
+This three-level inheritance gives you:
+- Universal safety instructions (always present)
+- Task-specific structure (shared across all classifiers)
+- Use-case-specific content (unique to sentiment analysis)
+
+## Common Mistakes
+
+- **Confusing `{{> partial}}` with `{{#> partial}}`.** The `{{> partial}}` syntax is a simple include. The `{{#> partial}}...{{/partial}}` syntax is a block call that passes content to `@partial-block`. You need the block syntax for inheritance.
+- **Forgetting `{{> @partial-block}}` in the layout partial.** If your layout partial does not include `{{> @partial-block}}`, the child content is silently discarded. Always include the slot where child content should appear.
+- **Creating deep inheritance chains.** More than three levels of nesting becomes hard to trace. Keep your layout hierarchy shallow and use composition (multiple partials) instead of deep inheritance when possible.
+- **Not testing each layout level independently.** Test your base layout with simple content before building on top of it. Debugging a three-level inheritance chain is much harder than debugging each level individually.
+
+## Your Task
+
+Create a base layout partial that defines a common structure with a `@partial-block` slot. Build two different templates that both use this layout but provide different content. Verify that changes to the base layout are reflected in both templates.

@@ -1,0 +1,127 @@
+---
+title: "Email Template"
+description: "Using multiple variables in a single template for real-world email personalization and template reuse."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 2
+difficulty: "beginner"
+estimatedMinutes: 10
+isFree: true
+tags: ["handlebars", "templates", "variables", "email", "personalization"]
+---
+
+## What You'll Learn
+
+You will learn how to use multiple variables in a single Handlebars template and understand how template reuse works by passing different context objects to the same compiled template.
+
+## Key Concepts
+
+### Multiple Variables in One Template
+
+In Exercise 1 you used a single `{{name}}` placeholder. Real templates use many variables. Each `{{placeholder}}` maps to a key in the context object you pass at execution time.
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(
+  `Dear {{recipientName}},
+
+Thank you for your interest in {{productName}}.
+Your order #{{orderId}} has been confirmed.
+
+Best regards,
+{{senderName}}`
+);
+
+const result = template({
+  recipientName: "Alice",
+  productName: "AI Toolkit Pro",
+  orderId: "12345",
+  senderName: "Bob",
+});
+```
+
+Every `{{...}}` expression is replaced independently. You can have as many as you need, and they can appear anywhere in the string -- in sentences, on their own lines, or even next to each other.
+
+### Template Reuse with Different Data
+
+The real power of templates is reuse. You compile once, then call the template function with different context objects to produce different outputs:
+
+```typescript
+const emailTemplate = Handlebars.compile(
+  `Hi {{name}}, your {{plan}} plan renews on {{renewalDate}}.`
+);
+
+// Same template, three different emails
+const email1 = emailTemplate({
+  name: "Alice",
+  plan: "Pro",
+  renewalDate: "March 1",
+});
+// "Hi Alice, your Pro plan renews on March 1."
+
+const email2 = emailTemplate({
+  name: "Bob",
+  plan: "Enterprise",
+  renewalDate: "April 15",
+});
+// "Hi Bob, your Enterprise plan renews on April 15."
+
+const email3 = emailTemplate({
+  name: "Carol",
+  plan: "Starter",
+  renewalDate: "March 1",
+});
+// "Hi Carol, your Starter plan renews on March 1."
+```
+
+This is identical to how production systems work. A SaaS company stores one email template and renders it thousands of times with different customer data.
+
+### Real-World Email Personalization
+
+In AI engineering, you will frequently personalize prompts the same way you personalize emails. Consider an AI assistant that sends customized summaries:
+
+```typescript
+const summaryPrompt = Handlebars.compile(
+  `You are an assistant for {{companyName}}.
+The user's name is {{userName}} and they work in the {{department}} department.
+Their preferred language is {{language}}.
+
+Summarize the following document for them:
+{{documentContent}}`
+);
+
+const prompt = summaryPrompt({
+  companyName: "Acme Corp",
+  userName: "Dana",
+  department: "Engineering",
+  language: "English",
+  documentContent: "Quarterly revenue increased by 15%...",
+});
+```
+
+Each field comes from a different source -- company settings, user profile, user preferences, and the uploaded document -- but they all merge cleanly into one prompt string.
+
+### What Happens When a Variable Is Missing?
+
+If a variable in your template does not exist in the context object, Handlebars outputs an empty string. It does not throw an error:
+
+```typescript
+const template = Handlebars.compile("Hello {{name}}, your role is {{role}}.");
+
+const result = template({ name: "Eve" });
+// "Hello Eve, your role is ."
+```
+
+Notice the missing `role` just disappears, leaving an awkward space. This is by design -- Handlebars is lenient. But it means typos in variable names silently produce broken output. Always double-check that your context keys match your template placeholders.
+
+## Common Mistakes
+
+- **Mismatched variable names.** The template says `{{userName}}` but the context has `{ username: "..." }`. JavaScript is case-sensitive, so `userName` and `username` are different keys.
+- **Forgetting a variable in the context.** If you have five placeholders but only provide four values, the fifth renders as an empty string with no error. Review your templates carefully.
+- **Using template literals and Handlebars together incorrectly.** Backtick strings let you write multi-line templates, but do not confuse JavaScript template literal interpolation with Handlebars syntax. JavaScript interpolation runs immediately at string creation; Handlebars placeholders run when you call the template function.
+- **Not reusing compiled templates.** If you call `Handlebars.compile()` inside a loop, you are recompiling on every iteration. Compile once outside the loop and reuse the function.
+
+## Your Task
+
+Create an email template that uses at least four different variables (such as recipient name, sender name, subject matter, and a call-to-action). Compile it once, then execute it with two different context objects to produce two different personalized emails.

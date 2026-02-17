@@ -1,0 +1,198 @@
+---
+title: "Simple Helpers"
+description: "Creating custom Handlebars helpers for formatting, transforming, and extending template capabilities."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 11
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "helpers", "registerHelper", "formatting", "functions"]
+---
+
+## What You'll Learn
+
+You will learn how to create custom Handlebars helpers using `Handlebars.registerHelper()`, understand why helpers should be pure functions, and build practical formatting helpers like uppercase, currency, and truncate.
+
+## Key Concepts
+
+### What Are Helpers?
+
+Helpers are custom functions you register with Handlebars. They extend the template language with capabilities that Handlebars does not provide out of the box. Think of them as functions you can call from inside your templates.
+
+You already know that Handlebars is intentionally "logic-less" -- it does not support comparison operators, string manipulation, or math. Helpers are how you add those capabilities in a controlled way.
+
+### Registering a Simple Helper
+
+Use `Handlebars.registerHelper()` to create a helper. It takes a name and a function:
+
+```typescript
+import Handlebars from "handlebars";
+
+Handlebars.registerHelper("uppercase", function (str: string) {
+  return str.toUpperCase();
+});
+
+const template = Handlebars.compile("Hello, {{uppercase name}}!");
+const result = template({ name: "alice" });
+// "Hello, ALICE!"
+```
+
+The syntax `{{uppercase name}}` calls the helper named `uppercase` and passes the value of `name` as its first argument. The helper returns a transformed value that replaces the expression in the output.
+
+### How Helpers Receive Arguments
+
+When you write `{{helperName arg1 arg2}}`, Handlebars calls your helper function with `arg1` and `arg2` as positional parameters:
+
+```typescript
+Handlebars.registerHelper("shout", function (text: string, times: number) {
+  return (text.toUpperCase() + "! ").repeat(times).trim();
+});
+
+const template = Handlebars.compile("{{shout greeting 3}}");
+const result = template({ greeting: "hello" });
+// "HELLO! HELLO! HELLO!"
+```
+
+Arguments can be context variables (like `name`) or literal values (like `3` or `"hello"`).
+
+### Formatting Helpers
+
+Here are three practical helpers you will use frequently:
+
+**Uppercase helper:**
+
+```typescript
+Handlebars.registerHelper("uppercase", function (str: string) {
+  if (typeof str !== "string") return "";
+  return str.toUpperCase();
+});
+
+// Usage: {{uppercase title}}
+```
+
+**Currency formatter:**
+
+```typescript
+Handlebars.registerHelper("currency", function (amount: number) {
+  if (typeof amount !== "number") return "$0.00";
+  return "$" + amount.toFixed(2);
+});
+
+const template = Handlebars.compile("Total: {{currency price}}");
+const result = template({ price: 49.9 });
+// "Total: $49.90"
+```
+
+**Truncate helper:**
+
+```typescript
+Handlebars.registerHelper(
+  "truncate",
+  function (str: string, length: number) {
+    if (typeof str !== "string") return "";
+    if (str.length <= length) return str;
+    return str.substring(0, length) + "...";
+  }
+);
+
+const template = Handlebars.compile("Summary: {{truncate description 50}}");
+const result = template({
+  description:
+    "This is a very long description that goes on and on and should be truncated for display purposes.",
+});
+// "Summary: This is a very long description that goes on and..."
+```
+
+### Helpers Should Be Pure Functions
+
+A "pure function" is one that:
+1. Always returns the same output for the same input
+2. Has no side effects (does not modify external state)
+
+Your helpers should follow this pattern:
+
+```typescript
+// GOOD: Pure function, predictable
+Handlebars.registerHelper("lowercase", function (str: string) {
+  return str.toLowerCase();
+});
+
+// BAD: Side effect, modifies external state
+let callCount = 0;
+Handlebars.registerHelper("lowercase", function (str: string) {
+  callCount++; // Side effect!
+  console.log("Called!"); // Another side effect!
+  return str.toLowerCase();
+});
+```
+
+Pure helpers are easier to test, debug, and reason about. When a template produces unexpected output, you want to be confident that each helper always behaves the same way.
+
+### Type Safety in Helpers
+
+Since helpers receive arguments from template context, the values might not be what you expect. Always add defensive type checking:
+
+```typescript
+Handlebars.registerHelper("capitalize", function (str: string) {
+  if (typeof str !== "string" || str.length === 0) return "";
+  return str.charAt(0).toUpperCase() + str.slice(1);
+});
+```
+
+If someone passes `undefined` (because the variable does not exist in the context), your helper will not crash.
+
+### Helpers in AI Engineering
+
+Helpers are invaluable for formatting data before it enters a prompt. You might need to truncate long documents, format numbers, or clean up text:
+
+```typescript
+Handlebars.registerHelper("wordCount", function (text: string) {
+  if (typeof text !== "string") return 0;
+  return text.split(/\s+/).filter(Boolean).length;
+});
+
+Handlebars.registerHelper("truncateWords", function (text: string, max: number) {
+  if (typeof text !== "string") return "";
+  const words = text.split(/\s+/);
+  if (words.length <= max) return text;
+  return words.slice(0, max).join(" ") + "...";
+});
+
+const template = Handlebars.compile(`
+Analyze the following text ({{wordCount document}} words):
+
+{{truncateWords document 500}}
+
+Provide a summary in under 100 words.
+`);
+```
+
+This is a real pattern in production AI systems. LLMs have token limits, so you need to truncate long inputs. A helper handles this cleanly inside the template.
+
+### Using Helpers with Literals
+
+You can pass literal strings and numbers directly to helpers:
+
+```typescript
+Handlebars.registerHelper("repeat", function (str: string, count: number) {
+  return str.repeat(count);
+});
+
+const template = Handlebars.compile('{{repeat "=-" 20}}');
+const result = template({});
+// "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+```
+
+Literal strings must be in quotes; literal numbers are bare. Context variables are also bare (Handlebars resolves them from the context object).
+
+## Common Mistakes
+
+- **Forgetting to handle `undefined` or `null` arguments.** If a variable is missing from the context, your helper receives `undefined`. Always add a type check at the beginning of your helper function.
+- **Registering helpers after compiling templates.** Helpers must be registered before you call `Handlebars.compile()`. If you register a helper after compilation, templates compiled before the registration will not know about it.
+- **Making helpers impure (side effects).** Avoid logging, network calls, or state mutation inside helpers. Helpers should transform input to output and nothing else.
+- **Naming conflicts.** If you register two helpers with the same name, the second one silently overwrites the first. Use descriptive, unique names for your helpers.
+
+## Your Task
+
+Register three custom helpers: one that converts text to uppercase, one that formats a number as currency, and one that truncates a string to a given length with an ellipsis. Use all three helpers in a single template and verify the output.

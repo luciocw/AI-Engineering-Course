@@ -1,0 +1,166 @@
+---
+title: "CSV Processing"
+description: "Learn to filter, aggregate, and transform CSV data using TypeScript array methods like filter, map, and reduce."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 2
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["data", "pipelines", "csv", "filter", "map", "reduce", "aggregation"]
+---
+
+## What You'll Learn
+
+You will learn how to process parsed CSV data using TypeScript array methods. You will filter rows based on conditions, transform data with `map`, and aggregate values (sum, average, count) with `reduce`. These are the fundamental operations of any data pipeline.
+
+## Key Concepts
+
+### Why Processing Matters
+
+Parsing a CSV file is only the first step. Raw data is rarely in the shape you need. Before you can send data to an LLM, generate a report, or load it into a database, you need to filter, transform, and summarize it. This is the "T" in ETL (Extract, Transform, Load).
+
+### Starting Point: Parsed Data
+
+Assume you have already parsed your CSV (from the previous exercise):
+
+```typescript
+interface SalesRecord {
+  product: string;
+  quantity: number;
+  price: number;
+  region: string;
+}
+
+// Imagine this came from CSV parsing + type conversion
+const sales: SalesRecord[] = [
+  { product: "Widget", quantity: 10, price: 25.0, region: "West" },
+  { product: "Gadget", quantity: 5, price: 50.0, region: "East" },
+  { product: "Widget", quantity: 8, price: 25.0, region: "East" },
+  { product: "Gizmo", quantity: 3, price: 75.0, region: "West" },
+  { product: "Gadget", quantity: 12, price: 50.0, region: "West" },
+];
+```
+
+### Filtering with `filter`
+
+The `filter` method creates a new array containing only the elements that pass a test. It does not modify the original array.
+
+```typescript
+// Get only West region sales
+const westSales = sales.filter((record) => record.region === "West");
+// [
+//   { product: "Widget", quantity: 10, price: 25.0, region: "West" },
+//   { product: "Gizmo", quantity: 3, price: 75.0, region: "West" },
+//   { product: "Gadget", quantity: 12, price: 50.0, region: "West" },
+// ]
+
+// Get high-value sales (total > 200)
+const highValue = sales.filter((r) => r.quantity * r.price > 200);
+
+// Combine multiple conditions
+const westWidgets = sales.filter(
+  (r) => r.region === "West" && r.product === "Widget"
+);
+```
+
+### Transforming with `map`
+
+The `map` method creates a new array by applying a function to every element. Use it when you need to reshape your data.
+
+```typescript
+// Compute total for each record
+const withTotals = sales.map((record) => ({
+  ...record,
+  total: record.quantity * record.price,
+}));
+// Each object now has a `total` field
+
+// Extract just the product names
+const productNames = sales.map((r) => r.product);
+// ["Widget", "Gadget", "Widget", "Gizmo", "Gadget"]
+
+// Create a summary view
+const summaryView = sales.map((r) => ({
+  label: `${r.product} (${r.region})`,
+  revenue: r.quantity * r.price,
+}));
+```
+
+### Aggregating with `reduce`
+
+The `reduce` method combines all elements into a single value. It is the most powerful (and most confusing) array method. The key is the **accumulator** -- the value that builds up as you process each element.
+
+```typescript
+// Sum all quantities
+const totalQuantity = sales.reduce((sum, record) => sum + record.quantity, 0);
+// 38
+
+// Sum total revenue
+const totalRevenue = sales.reduce(
+  (sum, record) => sum + record.quantity * record.price,
+  0
+);
+// 10*25 + 5*50 + 8*25 + 3*75 + 12*50 = 1475
+
+// Count records per region
+const countByRegion = sales.reduce(
+  (counts, record) => {
+    counts[record.region] = (counts[record.region] || 0) + 1;
+    return counts;
+  },
+  {} as Record<string, number>
+);
+// { West: 3, East: 2 }
+```
+
+The second argument to `reduce` is the initial value of the accumulator. For sums, start with `0`. For objects, start with `{}`.
+
+### Computing Averages
+
+There is no built-in average method, but it is simple with reduce:
+
+```typescript
+const averagePrice =
+  sales.reduce((sum, r) => sum + r.price, 0) / sales.length;
+// (25 + 50 + 25 + 75 + 50) / 5 = 45
+```
+
+Always check for `sales.length === 0` before dividing to avoid `NaN`.
+
+### Chaining Methods
+
+The real power comes from chaining these methods together. Each method returns a new array, so you can pipe the result into the next operation:
+
+```typescript
+// Total revenue for West region only
+const westRevenue = sales
+  .filter((r) => r.region === "West")
+  .map((r) => r.quantity * r.price)
+  .reduce((sum, total) => sum + total, 0);
+// 250 + 225 + 600 = 1075
+```
+
+This is a mini data pipeline: filter the rows, compute a value for each row, then sum them up. You will build larger versions of this pattern throughout the module.
+
+### Why This Matters for AI Engineering
+
+When you build AI-powered applications, you constantly need to:
+
+- **Filter** relevant records before sending them to an LLM (to stay within context limits)
+- **Transform** raw data into the format your prompt template expects
+- **Aggregate** results to provide summary statistics alongside LLM outputs
+
+For example, before asking an LLM to analyze customer feedback, you might filter for only negative reviews, map them into a structured format, and compute the total count to include in your prompt context.
+
+## Common Mistakes
+
+- **Mutating the original array.** Methods like `filter` and `map` return new arrays. If you forget to capture the return value, your work is lost. Write `const result = arr.filter(...)`, not just `arr.filter(...)`.
+- **Forgetting the initial value in reduce.** Always provide the second argument: `reduce((acc, item) => ..., initialValue)`. Without it, the first array element becomes the initial accumulator, which often causes type errors.
+- **Dividing by zero when computing averages.** Always check that the array is not empty before dividing by `.length`.
+- **Using `map` when you want `forEach`.** If you do not need the returned array (just want side effects like logging), use `forEach`. If you need a new array of transformed values, use `map`.
+- **Creating overly long chains.** If a chain gets longer than 3-4 steps, break it into named intermediate variables for readability.
+
+## Your Task
+
+Given a parsed array of sales records, write functions that: (1) filter records by a specific region, (2) compute the total revenue across all records, and (3) calculate the average quantity per record. Use `filter`, `map`, and `reduce` to accomplish this.

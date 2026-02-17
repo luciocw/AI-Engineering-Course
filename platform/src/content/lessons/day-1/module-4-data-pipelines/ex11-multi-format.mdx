@@ -1,0 +1,265 @@
+---
+title: "Multi-Format Export"
+description: "Learn to export data to CSV, JSON, and Markdown formats using format adapters and content negotiation patterns."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 11
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "export", "csv", "json", "markdown", "format-adapters"]
+---
+
+## What You'll Learn
+
+You will learn how to export pipeline data to multiple formats (CSV, JSON, Markdown), build format adapter functions that convert data into any target format, and implement a content negotiation pattern where the caller specifies which format they want. This is how real data platforms serve data to different consumers.
+
+## Key Concepts
+
+### Why Multi-Format Export?
+
+Different consumers need different formats:
+
+- **CSV** for spreadsheets and data analysts
+- **JSON** for APIs and other services
+- **Markdown** for documentation, reports, and LLM prompts
+
+Your data pipeline should produce clean, structured data internally and then export it in whatever format the consumer requests. This separates your processing logic from your presentation logic.
+
+### Exporting to JSON
+
+JSON is the easiest format. TypeScript objects serialize directly:
+
+```typescript
+interface ExportOptions {
+  pretty?: boolean;
+}
+
+function exportToJSON<T>(data: T[], options: ExportOptions = {}): string {
+  const indent = options.pretty ? 2 : undefined;
+  return JSON.stringify(data, null, indent);
+}
+
+// Compact for APIs
+const compact = exportToJSON(records);
+// [{"name":"Alice","age":30},{"name":"Bob","age":25}]
+
+// Pretty for humans
+const pretty = exportToJSON(records, { pretty: true });
+// [
+//   {
+//     "name": "Alice",
+//     "age": 30
+//   },
+//   ...
+// ]
+```
+
+### Exporting to CSV
+
+CSV export requires you to flatten objects back into rows:
+
+```typescript
+function exportToCSV<T extends Record<string, unknown>>(
+  data: T[],
+  columns?: string[]
+): string {
+  if (data.length === 0) return "";
+
+  // Use provided columns or infer from first record
+  const cols = columns ?? Object.keys(data[0]);
+
+  // Header row
+  const header = cols.join(",");
+
+  // Data rows
+  const rows = data.map((record) =>
+    cols
+      .map((col) => {
+        const value = record[col];
+        // Wrap in quotes if the value contains commas, quotes, or newlines
+        const str = String(value ?? "");
+        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      })
+      .join(",")
+  );
+
+  return [header, ...rows].join("\n");
+}
+```
+
+Notice the quoting logic: if a value contains commas, quotes, or newlines, it must be wrapped in double quotes. Quotes within the value are escaped by doubling them. This is the CSV standard (RFC 4180).
+
+### Exporting to Markdown
+
+Markdown tables are great for reports and LLM prompts:
+
+```typescript
+function exportToMarkdown<T extends Record<string, unknown>>(
+  data: T[],
+  options: {
+    title?: string;
+    columns?: string[];
+    alignments?: Array<"left" | "center" | "right">;
+  } = {}
+): string {
+  if (data.length === 0) return options.title ? `# ${options.title}\n\nNo data.` : "No data.";
+
+  const cols = options.columns ?? Object.keys(data[0]);
+
+  // Build alignment row
+  const alignRow = cols.map((_, i) => {
+    const align = options.alignments?.[i] ?? "left";
+    if (align === "center") return ":---:";
+    if (align === "right") return "---:";
+    return "---";
+  });
+
+  // Build header
+  const header = `| ${cols.join(" | ")} |`;
+  const separator = `| ${alignRow.join(" | ")} |`;
+
+  // Build data rows
+  const rows = data.map(
+    (record) => `| ${cols.map((col) => String(record[col] ?? "")).join(" | ")} |`
+  );
+
+  const parts: string[] = [];
+  if (options.title) {
+    parts.push(`# ${options.title}`, "");
+  }
+  parts.push(header, separator, ...rows);
+
+  return parts.join("\n");
+}
+```
+
+### The Format Adapter Pattern
+
+A format adapter is a function that converts data into a specific format. Collecting them in a registry makes your export system extensible:
+
+```typescript
+type FormatAdapter<T> = (data: T[], options?: Record<string, unknown>) => string;
+
+interface ExportRegistry<T> {
+  adapters: Map<string, FormatAdapter<T>>;
+  register(format: string, adapter: FormatAdapter<T>): void;
+  export(format: string, data: T[], options?: Record<string, unknown>): string;
+  supportedFormats(): string[];
+}
+
+function createExportRegistry<T>(): ExportRegistry<T> {
+  const adapters = new Map<string, FormatAdapter<T>>();
+
+  return {
+    adapters,
+    register(format, adapter) {
+      adapters.set(format.toLowerCase(), adapter);
+    },
+    export(format, data, options) {
+      const adapter = adapters.get(format.toLowerCase());
+      if (!adapter) {
+        const supported = Array.from(adapters.keys()).join(", ");
+        throw new Error(
+          `Unsupported format: "${format}". Supported: ${supported}`
+        );
+      }
+      return adapter(data, options);
+    },
+    supportedFormats() {
+      return Array.from(adapters.keys());
+    },
+  };
+}
+
+// Set up the registry
+const registry = createExportRegistry<SalesRecord>();
+registry.register("json", (data, opts) =>
+  exportToJSON(data, { pretty: opts?.pretty as boolean })
+);
+registry.register("csv", (data) => exportToCSV(data));
+registry.register("markdown", (data, opts) =>
+  exportToMarkdown(data, { title: opts?.title as string })
+);
+
+// Use it
+const jsonOutput = registry.export("json", records, { pretty: true });
+const csvOutput = registry.export("csv", records);
+const mdOutput = registry.export("markdown", records, { title: "Sales Report" });
+```
+
+### Content Negotiation
+
+Content negotiation is the pattern where the caller specifies the desired format. This is common in APIs (via the `Accept` header) and CLI tools (via a `--format` flag):
+
+```typescript
+function exportData<T extends Record<string, unknown>>(
+  data: T[],
+  format: "json" | "csv" | "markdown",
+  options: Record<string, unknown> = {}
+): string {
+  switch (format) {
+    case "json":
+      return exportToJSON(data, { pretty: true });
+    case "csv":
+      return exportToCSV(data);
+    case "markdown":
+      return exportToMarkdown(data, options);
+    default:
+      // TypeScript exhaustive check
+      const _exhaustive: never = format;
+      throw new Error(`Unhandled format: ${_exhaustive}`);
+  }
+}
+```
+
+The `never` type in the default case ensures TypeScript will error if you add a new format to the union but forget to handle it in the switch statement.
+
+### Writing to Files
+
+Once you have the formatted string, write it to disk:
+
+```typescript
+import { writeFileSync } from "fs";
+
+function exportToFile<T extends Record<string, unknown>>(
+  data: T[],
+  filePath: string,
+  format: "json" | "csv" | "markdown"
+): void {
+  const content = exportData(data, format);
+  const extension = format === "markdown" ? ".md" : `.${format}`;
+
+  // Ensure file has correct extension
+  const finalPath = filePath.endsWith(extension)
+    ? filePath
+    : `${filePath}${extension}`;
+
+  writeFileSync(finalPath, content, "utf-8");
+  console.log(`Exported ${data.length} records to ${finalPath}`);
+}
+```
+
+### Why This Matters for AI Engineering
+
+Multi-format export is important because:
+
+1. **LLM context**: You might format data as Markdown for inclusion in a prompt, as JSON for structured output parsing, or as CSV for downstream analysis
+2. **Interoperability**: Your AI pipeline might feed data to spreadsheets (CSV), APIs (JSON), or documentation (Markdown)
+3. **Testing and debugging**: Being able to quickly export pipeline results in a human-readable format (Markdown) makes debugging much easier
+4. **Flexibility**: Different parts of your system need different formats. Building adapters once means you never have to write format-specific code again
+
+## Common Mistakes
+
+- **Forgetting CSV escaping.** Values with commas, quotes, or newlines must be quoted. Missing this produces corrupt CSV files that break spreadsheet imports.
+- **Not handling empty datasets.** Every export function should handle an empty array gracefully, returning headers-only (CSV), an empty array (JSON), or a "No data" message (Markdown).
+- **Hardcoding column order.** Let the caller specify columns via options. The order in `Object.keys()` is not guaranteed in all environments.
+- **Mixing formatting with data processing.** Keep your pipeline pure (process data) and your exporters pure (format data). Do not mix business logic into export functions.
+- **Not testing round-trip consistency.** If you export to CSV and then re-parse the CSV, you should get the same data back. Test this, especially with special characters.
+
+## Your Task
+
+Build an export system that takes an array of records and exports them to CSV, JSON, and Markdown. Implement a format adapter registry where new formats can be added. Handle edge cases like values with commas, empty datasets, and custom column ordering. Write a function that exports the same data to all three formats at once.

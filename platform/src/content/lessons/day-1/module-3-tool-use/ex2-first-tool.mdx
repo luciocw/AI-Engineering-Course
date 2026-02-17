@@ -1,0 +1,217 @@
+---
+title: "Your First Tool Call"
+description: "Make your first API call with tools, parse tool_use responses, send results back, and understand the tool use loop."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 2
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["tools", "function-calling", "tool-use-loop", "api-call", "tool-results"]
+---
+
+## What You'll Learn
+
+- How to pass tools to the Anthropic API
+- How to detect and parse `tool_use` content blocks in the response
+- How to send tool results back to the model
+- The complete tool use loop from request to final answer
+
+## Key Concepts
+
+### Sending Tools to the API
+
+You pass your tool definitions in the `tools` parameter of the API call:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+const tools: Anthropic.Tool[] = [
+  {
+    name: "get_weather",
+    description: "Get current weather for a city.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        city: { type: "string", description: "City name" },
+      },
+      required: ["city"],
+    },
+  },
+];
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  tools: tools,
+  messages: [{ role: "user", content: "What's the weather in Tokyo?" }],
+});
+```
+
+### Understanding the Response
+
+When Claude decides to use a tool, the response has a `stop_reason` of `"tool_use"` and contains a `tool_use` content block:
+
+```typescript
+// response.stop_reason === "tool_use"
+// response.content might look like:
+[
+  {
+    type: "text",
+    text: "I'll check the weather in Tokyo for you.",
+  },
+  {
+    type: "tool_use",
+    id: "toolu_01ABC123",    // unique ID for this tool call
+    name: "get_weather",      // which tool to call
+    input: { city: "Tokyo" }, // the arguments
+  },
+]
+```
+
+Key things to notice:
+- The response can contain **both** text and tool_use blocks
+- Each tool_use block has a unique `id` you must reference when sending results back
+- The `input` object contains the arguments matching your schema
+
+### Parsing Tool Use Blocks
+
+Here is how to find tool use blocks in the response:
+
+```typescript
+// Find all tool_use blocks
+const toolUseBlocks = response.content.filter(
+  (block): block is Anthropic.ToolUseBlock => block.type === "tool_use"
+);
+
+// Process the first tool call
+if (toolUseBlocks.length > 0) {
+  const toolCall = toolUseBlocks[0];
+  console.log(`Tool: ${toolCall.name}`);
+  console.log(`Args: ${JSON.stringify(toolCall.input)}`);
+  console.log(`ID:   ${toolCall.id}`);
+}
+```
+
+### Sending Tool Results Back
+
+After running your function, send the result back as a `tool_result` content block. You must include the `tool_use_id` to match the result to the original request:
+
+```typescript
+// Simulate running the tool
+function getWeather(city: string): string {
+  // In real code, this would call a weather API
+  return JSON.stringify({ city, temp: 22, conditions: "Sunny" });
+}
+
+// Execute the tool
+const toolCall = toolUseBlocks[0];
+const result = getWeather(toolCall.input.city as string);
+
+// Send the result back to Claude
+const followUp = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  tools: tools,
+  messages: [
+    { role: "user", content: "What's the weather in Tokyo?" },
+    { role: "assistant", content: response.content },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: result,
+        },
+      ],
+    },
+  ],
+});
+
+// Now Claude gives the final answer using the tool result
+console.log(followUp.content[0].type === "text" && followUp.content[0].text);
+// "The weather in Tokyo is 22°C and sunny."
+```
+
+### The Complete Tool Use Loop
+
+Here is the full pattern you will use in almost every tool-calling application:
+
+```typescript
+async function runWithTools(userMessage: string) {
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  // Step 1: Send the initial request
+  let response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    tools: tools,
+    messages: messages,
+  });
+
+  // Step 2: Loop while Claude wants to use tools
+  while (response.stop_reason === "tool_use") {
+    // Add assistant's response to messages
+    messages.push({ role: "assistant", content: response.content });
+
+    // Find and execute all tool calls
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        const result = executeToolCall(block.name, block.input);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      }
+    }
+
+    // Send results back
+    messages.push({ role: "user", content: toolResults });
+
+    response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      tools: tools,
+      messages: messages,
+    });
+  }
+
+  // Step 3: Return the final text response
+  const textBlock = response.content.find((b) => b.type === "text");
+  return textBlock?.type === "text" ? textBlock.text : "No response";
+}
+
+function executeToolCall(name: string, input: unknown): string {
+  switch (name) {
+    case "get_weather":
+      return JSON.stringify({ temp: 22, conditions: "Sunny" });
+    default:
+      return JSON.stringify({ error: `Unknown tool: ${name}` });
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Forgetting to include `tool_use_id`** -- Every `tool_result` must reference the `id` from the corresponding `tool_use` block. Without it, the API returns an error.
+
+2. **Not looping** -- Claude might need to call multiple tools in sequence. Always use a `while` loop that checks `stop_reason === "tool_use"`.
+
+3. **Dropping message history** -- Each follow-up request must include the full conversation history: the original user message, the assistant's tool_use response, and your tool_result.
+
+4. **Returning non-string results** -- The `content` field in a `tool_result` must be a string (or an array of content blocks). Always `JSON.stringify` objects.
+
+5. **Not passing `tools` in follow-up calls** -- You must include the `tools` array in every API call, not just the first one.
+
+## Your Task
+
+Build a complete tool use loop with a `calculate` tool that performs basic math. The tool should accept `operation` (add, subtract, multiply, divide) and two numbers (`a` and `b`). When the user asks "What is 42 multiplied by 17?", Claude should call your tool and then respond with the answer.
+
+Implement the full loop: define the tool, make the API call, detect tool use, execute the function, send results back, and print the final answer.

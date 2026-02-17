@@ -1,0 +1,201 @@
+---
+title: "Helper Parameters"
+description: "Understanding positional parameters, hash arguments, and building configurable helpers with named options."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 12
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "helpers", "parameters", "hash-arguments", "options"]
+---
+
+## What You'll Learn
+
+You will learn the difference between positional parameters and hash (named) arguments in Handlebars helpers, how to access the `options.hash` object, and how to build configurable helpers using the named options pattern.
+
+## Key Concepts
+
+### Positional Parameters
+
+You already used positional parameters in Exercise 11. These are arguments passed to a helper in order, separated by spaces:
+
+```typescript
+import Handlebars from "handlebars";
+
+Handlebars.registerHelper("truncate", function (str: string, length: number) {
+  if (typeof str !== "string") return "";
+  if (str.length <= length) return str;
+  return str.substring(0, length) + "...";
+});
+
+// "text" is the first argument, 20 is the second
+const template = Handlebars.compile("{{truncate text 20}}");
+```
+
+Positional parameters are straightforward when you have one or two arguments. But what happens when a helper needs five options? The call becomes hard to read:
+
+```typescript
+// Hard to read: which number means what?
+{{formatDate date "YYYY-MM-DD" true false "UTC"}}
+```
+
+This is where hash arguments come in.
+
+### Hash Arguments (Named Parameters)
+
+Handlebars supports named parameters using `key=value` syntax. These are called "hash arguments" and they appear after any positional parameters:
+
+```typescript
+Handlebars.registerHelper(
+  "formatNumber",
+  function (value: number, options: Handlebars.HelperOptions) {
+    const decimals = options.hash.decimals ?? 2;
+    const prefix = options.hash.prefix ?? "";
+    const suffix = options.hash.suffix ?? "";
+
+    return prefix + value.toFixed(decimals) + suffix;
+  }
+);
+
+const template = Handlebars.compile(
+  "Price: {{formatNumber price decimals=2 prefix=\"$\"}} per {{formatNumber weight decimals=1 suffix=\"kg\"}}"
+);
+
+const result = template({ price: 29.9, weight: 1.5 });
+// "Price: $29.90 per 1.5kg"
+```
+
+Hash arguments are passed as an object in `options.hash`. The `options` parameter is always the last argument Handlebars passes to your helper function.
+
+### The `options` Object
+
+Every Handlebars helper receives an `options` object as its final argument. For simple (non-block) helpers, the most useful property is `options.hash`:
+
+```typescript
+Handlebars.registerHelper(
+  "badge",
+  function (text: string, options: Handlebars.HelperOptions) {
+    const color = options.hash.color || "gray";
+    const size = options.hash.size || "medium";
+
+    return `[${color}|${size}] ${text}`;
+  }
+);
+
+const template = Handlebars.compile(
+  '{{badge status color="green" size="small"}}'
+);
+const result = template({ status: "Active" });
+// "[green|small] Active"
+```
+
+The `options.hash` object contains all the `key=value` pairs from the template call. If a key is not provided, it simply is not in the hash.
+
+### Mixing Positional and Hash Arguments
+
+You can use both positional parameters and hash arguments in the same call. Positional parameters come first, hash arguments come after:
+
+```typescript
+Handlebars.registerHelper(
+  "link",
+  function (text: string, url: string, options: Handlebars.HelperOptions) {
+    const target = options.hash.target || "_self";
+    const className = options.hash.class || "";
+
+    return `<a href="${url}" target="${target}" class="${className}">${text}</a>`;
+  }
+);
+
+const template = Handlebars.compile(
+  '{{link "Documentation" docUrl target="_blank" class="nav-link"}}'
+);
+const result = template({ docUrl: "https://docs.example.com" });
+// '<a href="https://docs.example.com" target="_blank" class="nav-link">Documentation</a>'
+```
+
+The first two arguments (`text` and `url`) are positional. The `target` and `class` are hash arguments accessed through `options.hash`.
+
+### Building Configurable Helpers
+
+The named options pattern lets you build helpers that are easy to use with sensible defaults but configurable when needed:
+
+```typescript
+Handlebars.registerHelper(
+  "truncate",
+  function (str: string, options: Handlebars.HelperOptions) {
+    if (typeof str !== "string") return "";
+
+    const length = options.hash.length ?? 100;
+    const ending = options.hash.ending ?? "...";
+    const wordBoundary = options.hash.wordBoundary ?? false;
+
+    if (str.length <= length) return str;
+
+    let truncated = str.substring(0, length);
+
+    if (wordBoundary) {
+      const lastSpace = truncated.lastIndexOf(" ");
+      if (lastSpace > 0) {
+        truncated = truncated.substring(0, lastSpace);
+      }
+    }
+
+    return truncated + ending;
+  }
+);
+
+// Simple usage with defaults
+const t1 = Handlebars.compile("{{truncate summary}}");
+
+// Customized usage
+const t2 = Handlebars.compile(
+  '{{truncate summary length=50 ending="[...]" wordBoundary=true}}'
+);
+```
+
+The same helper handles both cases. Defaults keep simple uses clean; hash arguments provide customization when needed.
+
+### Configurable Helpers in AI Engineering
+
+When building AI prompt helpers, configurability is essential because different models and tasks have different requirements:
+
+```typescript
+Handlebars.registerHelper(
+  "tokenBudget",
+  function (text: string, options: Handlebars.HelperOptions) {
+    const maxChars = options.hash.maxChars ?? 4000;
+    const strategy = options.hash.strategy ?? "truncate";
+    const label = options.hash.label ?? "Content";
+
+    if (text.length <= maxChars) return `${label}:\n${text}`;
+
+    if (strategy === "truncate") {
+      return `${label} (truncated):\n${text.substring(0, maxChars)}...`;
+    }
+
+    if (strategy === "summarize-hint") {
+      return `${label} (${text.length} chars, showing first ${maxChars}):\n${text.substring(0, maxChars)}...\n[Note: content was truncated. Ask the user for the full text if needed.]`;
+    }
+
+    return `${label}:\n${text.substring(0, maxChars)}`;
+  }
+);
+
+const template = Handlebars.compile(`
+{{tokenBudget userDocument maxChars=2000 strategy="summarize-hint" label="User's Document"}}
+`);
+```
+
+This helper adapts its truncation behavior based on named parameters, making it reusable across different prompt templates with different token budgets.
+
+## Common Mistakes
+
+- **Forgetting that `options` is always the last argument.** If your helper takes one positional parameter plus hash arguments, your function signature should be `function(param, options)`. If it takes two positional parameters, it should be `function(param1, param2, options)`.
+- **Not providing defaults for hash arguments.** If a hash argument is not specified in the template, it will be `undefined` in `options.hash`. Always use the nullish coalescing operator (`??`) or a fallback.
+- **Using hash arguments when positional would be clearer.** If your helper only needs one or two arguments and their meaning is obvious, positional parameters are simpler. Use hash arguments when you have optional configuration or more than two parameters.
+- **Putting hash arguments before positional arguments in the template.** In the template call, positional arguments must come before hash arguments: `{{helper posArg hashKey=value}}`, not `{{helper hashKey=value posArg}}`.
+
+## Your Task
+
+Build a configurable helper that accepts one positional parameter and at least three hash arguments with sensible defaults. Demonstrate calling it with just the positional argument (using defaults) and with all hash arguments customized.

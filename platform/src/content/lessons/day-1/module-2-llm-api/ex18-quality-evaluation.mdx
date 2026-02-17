@@ -1,0 +1,464 @@
+---
+title: "Quality Evaluation: LLM-as-Judge"
+description: "Learn the LLM-as-judge pattern for automated quality scoring, defining evaluation criteria, and deciding between human vs LLM evaluation."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 18
+difficulty: "advanced"
+estimatedMinutes: 30
+isFree: true
+tags: ["llm", "api", "evaluation", "quality", "llm-as-judge", "scoring", "automated-testing"]
+---
+
+## What You'll Learn
+
+- The LLM-as-judge pattern for automated quality evaluation
+- How to design evaluation criteria and rubrics
+- Building an evaluation pipeline
+- When to use human evaluation vs LLM evaluation
+- Calibrating and validating your evaluation system
+
+## Key Concepts
+
+### Why Automated Evaluation?
+
+You cannot improve what you cannot measure. When you change a prompt, switch models, or modify parameters, you need to know if the output got better or worse. Manually reviewing every output does not scale. The solution: use an LLM to evaluate the output of another LLM.
+
+```
+Your Prompt → LLM (generates output) → Evaluator LLM (scores quality)
+                                              ↓
+                                        Quality Score
+                                     + Specific Feedback
+```
+
+This is the "LLM-as-judge" pattern, and it is one of the most important tools in AI engineering.
+
+### Basic LLM-as-Judge
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+interface EvaluationResult {
+  score: number; // 1-5
+  reasoning: string;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+async function evaluateOutput(
+  prompt: string,
+  output: string,
+  criteria: string
+): Promise<EvaluationResult> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514", // Use a capable model for evaluation
+    max_tokens: 512,
+    temperature: 0,
+    system: `You are an expert evaluator. Score outputs on a scale of 1-5 based on the given criteria.
+
+1 = Poor: Fails to meet basic requirements
+2 = Below Average: Partially meets requirements with significant issues
+3 = Average: Meets basic requirements but nothing more
+4 = Good: Meets all requirements with minor room for improvement
+5 = Excellent: Exceeds requirements with high quality
+
+Be honest and specific in your evaluation. Always provide concrete examples from the output to support your score.
+
+Respond as JSON:
+{
+  "score": number,
+  "reasoning": "detailed explanation",
+  "strengths": ["specific strength 1", "..."],
+  "weaknesses": ["specific weakness 1", "..."]
+}`,
+    messages: [
+      {
+        role: "user",
+        content: `<prompt>${prompt}</prompt>
+
+<output>${output}</output>
+
+<criteria>${criteria}</criteria>
+
+Evaluate the output against the criteria.`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON in evaluation response");
+
+  return JSON.parse(jsonMatch[0]);
+}
+```
+
+### Defining Evaluation Criteria
+
+Good criteria are specific and measurable:
+
+```typescript
+interface EvaluationCriterion {
+  name: string;
+  description: string;
+  weight: number; // How important this criterion is (0-1)
+  rubric: Record<number, string>; // Score -> description
+}
+
+const CODE_REVIEW_CRITERIA: EvaluationCriterion[] = [
+  {
+    name: "accuracy",
+    description: "Are the identified issues real bugs or genuine concerns?",
+    weight: 0.35,
+    rubric: {
+      1: "Most identified issues are incorrect or irrelevant",
+      2: "Mix of real and false issues",
+      3: "Most issues are real, a few false positives",
+      4: "All issues are real and relevant",
+      5: "All issues are real, with insightful catches others would miss",
+    },
+  },
+  {
+    name: "actionability",
+    description: "Are the suggestions specific enough to act on?",
+    weight: 0.30,
+    rubric: {
+      1: "Vague suggestions like 'improve error handling'",
+      2: "Some specific suggestions, mostly generic",
+      3: "Most suggestions are specific with some generic ones",
+      4: "All suggestions are specific with clear actions",
+      5: "Suggestions include code examples and precise fixes",
+    },
+  },
+  {
+    name: "completeness",
+    description: "Does the review cover all important aspects?",
+    weight: 0.20,
+    rubric: {
+      1: "Misses major issues, reviews only surface level",
+      2: "Catches obvious issues, misses subtle ones",
+      3: "Good coverage of common issue types",
+      4: "Comprehensive coverage including edge cases",
+      5: "Thorough review covering security, performance, and maintainability",
+    },
+  },
+  {
+    name: "clarity",
+    description: "Is the review easy to understand and well-organized?",
+    weight: 0.15,
+    rubric: {
+      1: "Confusing, poorly organized",
+      2: "Understandable but disorganized",
+      3: "Clear and organized",
+      4: "Well-structured with clear prioritization",
+      5: "Exceptionally clear with excellent use of examples and formatting",
+    },
+  },
+];
+```
+
+### Multi-Criteria Evaluation
+
+Evaluate against multiple criteria and compute a weighted score:
+
+```typescript
+interface MultiCriteriaResult {
+  criteriaScores: Array<{
+    criterion: string;
+    score: number;
+    weight: number;
+    reasoning: string;
+  }>;
+  weightedScore: number;
+  overallFeedback: string;
+}
+
+async function multiCriteriaEvaluate(
+  prompt: string,
+  output: string,
+  criteria: EvaluationCriterion[]
+): Promise<MultiCriteriaResult> {
+  const criteriaText = criteria
+    .map(
+      (c) => `### ${c.name} (weight: ${c.weight})
+${c.description}
+Scoring rubric:
+${Object.entries(c.rubric)
+  .map(([score, desc]) => `  ${score}: ${desc}`)
+  .join("\n")}`
+    )
+    .join("\n\n");
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Evaluate this output against multiple criteria.
+
+<prompt>${prompt}</prompt>
+
+<output>${output}</output>
+
+<criteria>
+${criteriaText}
+</criteria>
+
+For each criterion, provide a score (1-5) and brief reasoning.
+Then provide overall feedback.
+
+Respond as JSON:
+{
+  "criteriaScores": [
+    {"criterion": "name", "score": N, "reasoning": "..."}
+  ],
+  "overallFeedback": "..."
+}`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON in evaluation");
+
+  const parsed = JSON.parse(jsonMatch[0]);
+
+  // Calculate weighted score
+  let weightedScore = 0;
+  const criteriaScores = parsed.criteriaScores.map(
+    (cs: { criterion: string; score: number; reasoning: string }) => {
+      const criterionDef = criteria.find((c) => c.name === cs.criterion);
+      const weight = criterionDef?.weight ?? 0;
+      weightedScore += cs.score * weight;
+      return { ...cs, weight };
+    }
+  );
+
+  return {
+    criteriaScores,
+    weightedScore,
+    overallFeedback: parsed.overallFeedback,
+  };
+}
+```
+
+### Evaluation Pipeline
+
+Evaluate a batch of outputs systematically:
+
+```typescript
+interface EvalTestCase {
+  id: string;
+  prompt: string;
+  output: string;
+  reference?: string; // Optional "gold standard" answer for comparison
+}
+
+interface EvalReport {
+  testCases: Array<{
+    id: string;
+    scores: MultiCriteriaResult;
+  }>;
+  averageWeightedScore: number;
+  scoreDistribution: Record<number, number>;
+  lowestScoringCases: string[];
+}
+
+async function runEvaluation(
+  testCases: EvalTestCase[],
+  criteria: EvaluationCriterion[]
+): Promise<EvalReport> {
+  const results = [];
+
+  for (const testCase of testCases) {
+    console.log(`Evaluating: ${testCase.id}`);
+    const scores = await multiCriteriaEvaluate(
+      testCase.prompt,
+      testCase.output,
+      criteria
+    );
+    results.push({ id: testCase.id, scores });
+  }
+
+  // Compute aggregate metrics
+  const avgScore =
+    results.reduce((sum, r) => sum + r.scores.weightedScore, 0) /
+    results.length;
+
+  const scoreDistribution: Record<number, number> = {
+    1: 0,
+    2: 0,
+    3: 0,
+    4: 0,
+    5: 0,
+  };
+
+  for (const r of results) {
+    const rounded = Math.round(r.scores.weightedScore);
+    scoreDistribution[rounded] = (scoreDistribution[rounded] || 0) + 1;
+  }
+
+  const sorted = [...results].sort(
+    (a, b) => a.scores.weightedScore - b.scores.weightedScore
+  );
+  const lowestScoring = sorted.slice(0, 3).map((r) => r.id);
+
+  return {
+    testCases: results,
+    averageWeightedScore: avgScore,
+    scoreDistribution,
+    lowestScoringCases: lowestScoring,
+  };
+}
+```
+
+### Reference-Based Evaluation
+
+When you have a "gold standard" answer, compare against it:
+
+```typescript
+async function evaluateAgainstReference(
+  output: string,
+  reference: string,
+  prompt: string
+): Promise<{
+  score: number;
+  factualAccuracy: number;
+  completeness: number;
+  reasoning: string;
+}> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 512,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Compare the output against the reference answer for this prompt.
+
+<prompt>${prompt}</prompt>
+
+<reference_answer>${reference}</reference_answer>
+
+<output_to_evaluate>${output}</output_to_evaluate>
+
+Evaluate:
+1. Factual accuracy: Does the output contain the same facts as the reference? (1-5)
+2. Completeness: Does the output cover everything the reference covers? (1-5)
+3. Overall quality: Considering accuracy and completeness, overall score (1-5)
+
+Respond as JSON:
+{
+  "score": N,
+  "factualAccuracy": N,
+  "completeness": N,
+  "reasoning": "..."
+}`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+  return JSON.parse(text.match(/\{[\s\S]*\}/)![0]);
+}
+```
+
+### When to Use Human vs LLM Evaluation
+
+```typescript
+// Use LLM evaluation when:
+// - You need to evaluate hundreds or thousands of outputs
+// - The criteria are well-defined and objective
+// - Speed matters more than perfect accuracy
+// - You are comparing relative quality (A vs B)
+
+// Use human evaluation when:
+// - The task is subjective (creative writing, humor)
+// - Stakes are high (medical, legal content)
+// - You are calibrating your LLM evaluator
+// - You need to catch subtle quality issues
+
+// Best practice: Start with human evaluation to establish a baseline,
+// then build an LLM evaluator that agrees with human judges,
+// then use the LLM evaluator at scale.
+```
+
+### Calibrating Your Evaluator
+
+Verify that your LLM evaluator agrees with human judgment:
+
+```typescript
+interface CalibrationResult {
+  agreement: number; // Percentage of exact matches
+  withinOne: number; // Percentage within 1 point
+  correlation: number; // Rough correlation measure
+}
+
+function calibrate(
+  llmScores: number[],
+  humanScores: number[]
+): CalibrationResult {
+  if (llmScores.length !== humanScores.length) {
+    throw new Error("Score arrays must have same length");
+  }
+
+  let exact = 0;
+  let withinOne = 0;
+
+  for (let i = 0; i < llmScores.length; i++) {
+    if (llmScores[i] === humanScores[i]) exact++;
+    if (Math.abs(llmScores[i] - humanScores[i]) <= 1) withinOne++;
+  }
+
+  // Simple correlation: mean absolute difference
+  const avgDiff =
+    llmScores.reduce((sum, s, i) => sum + Math.abs(s - humanScores[i]), 0) /
+    llmScores.length;
+
+  return {
+    agreement: exact / llmScores.length,
+    withinOne: withinOne / llmScores.length,
+    correlation: 1 - avgDiff / 4, // Normalized to 0-1
+  };
+}
+```
+
+## Common Mistakes
+
+1. **Using the same model to generate and evaluate**: If Claude generates the output and also evaluates it, there is a bias toward rating its own output highly. Use a different model or a more capable model for evaluation when possible.
+
+2. **Vague evaluation criteria**: "Is it good?" is not a useful criterion. "Does it correctly identify all SQL injection vulnerabilities in the code?" is specific and measurable.
+
+3. **Not calibrating against human judgment**: An LLM evaluator that does not agree with human reviewers is worse than useless -- it gives you false confidence. Always validate with a small set of human-scored examples.
+
+4. **Binary scoring (good/bad)**: A 1-5 scale gives you much more information than pass/fail. You can see gradual improvements or degradations that binary scoring would miss.
+
+5. **Evaluating only on easy cases**: Your evaluation set should include hard cases, edge cases, and adversarial inputs. An evaluator that only sees clean, easy inputs will overestimate the quality of your system.
+
+## Your Task
+
+Build a quality evaluation system that:
+
+1. Implements the LLM-as-judge pattern with structured scoring (1-5 scale)
+2. Defines at least 3 evaluation criteria with rubrics and weights
+3. Evaluates output against multiple criteria simultaneously
+4. Runs evaluation on at least 5 test cases
+5. Produces an evaluation report with averages, score distributions, and the lowest-scoring cases
+6. Identifies the weakest criterion across all test cases
+
+Choose one of these evaluation contexts:
+- **Code explanation quality**: Evaluate how well the LLM explains code to beginners
+- **Email draft quality**: Evaluate professional emails generated by the LLM
+- **Summary quality**: Evaluate document summaries for accuracy and conciseness
+
+Print a full evaluation report showing individual scores, aggregate metrics, and specific feedback for improvement.
+
+Bonus: Implement reference-based evaluation by creating "gold standard" answers for your test cases and comparing LLM output against them.

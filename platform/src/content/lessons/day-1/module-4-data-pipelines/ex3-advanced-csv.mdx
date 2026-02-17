@@ -1,0 +1,219 @@
+---
+title: "Advanced CSV Processing"
+description: "Learn group-by operations, sorting, derived metrics, and building summary tables from CSV data in TypeScript."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 3
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "csv", "group-by", "sorting", "summary", "analytics"]
+---
+
+## What You'll Learn
+
+You will learn how to perform group-by operations on data, sort records by any field, compute derived metrics, and build summary tables. These are the analytics operations you need to turn raw data into insights -- the kind of insights you then feed to an LLM for interpretation.
+
+## Key Concepts
+
+### Group-By Operations
+
+Grouping is one of the most common data operations. You take a flat list of records and organize them by a shared field. SQL has `GROUP BY`. Pandas has `groupby()`. In TypeScript, you build it with `reduce`.
+
+```typescript
+interface SalesRecord {
+  product: string;
+  quantity: number;
+  price: number;
+  region: string;
+}
+
+// Group records by product
+function groupBy<T>(items: T[], key: keyof T): Record<string, T[]> {
+  return items.reduce(
+    (groups, item) => {
+      const groupKey = String(item[key]);
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
+      }
+      groups[groupKey].push(item);
+      return groups;
+    },
+    {} as Record<string, T[]>
+  );
+}
+
+const byProduct = groupBy(sales, "product");
+// {
+//   Widget: [{ product: "Widget", ... }, { product: "Widget", ... }],
+//   Gadget: [{ product: "Gadget", ... }, { product: "Gadget", ... }],
+//   Gizmo:  [{ product: "Gizmo", ... }]
+// }
+```
+
+This `groupBy` function is generic -- it works with any array of objects and any key. You will reuse this pattern constantly.
+
+### Aggregating Grouped Data
+
+Once data is grouped, you typically want to summarize each group:
+
+```typescript
+interface ProductSummary {
+  product: string;
+  totalQuantity: number;
+  totalRevenue: number;
+  recordCount: number;
+  averageOrderSize: number;
+}
+
+function summarizeByProduct(records: SalesRecord[]): ProductSummary[] {
+  const grouped = groupBy(records, "product");
+
+  return Object.entries(grouped).map(([product, items]) => {
+    const totalQuantity = items.reduce((sum, r) => sum + r.quantity, 0);
+    const totalRevenue = items.reduce(
+      (sum, r) => sum + r.quantity * r.price,
+      0
+    );
+
+    return {
+      product,
+      totalQuantity,
+      totalRevenue,
+      recordCount: items.length,
+      averageOrderSize: totalQuantity / items.length,
+    };
+  });
+}
+```
+
+This pattern -- group, then aggregate each group -- is the foundation of business analytics. It is also how you prepare data summaries to include in LLM prompts.
+
+### Sorting
+
+JavaScript's `sort` method modifies the array in place and takes a comparator function. The comparator returns a negative number, zero, or positive number to determine order.
+
+```typescript
+// Sort by total revenue (descending)
+const summaries = summarizeByProduct(sales);
+
+summaries.sort((a, b) => b.totalRevenue - a.totalRevenue);
+// Highest revenue first
+
+// Sort by product name (alphabetical)
+summaries.sort((a, b) => a.product.localeCompare(b.product));
+
+// Sort by multiple fields: region first, then revenue descending
+sales.sort((a, b) => {
+  const regionCompare = a.region.localeCompare(b.region);
+  if (regionCompare !== 0) return regionCompare;
+  return b.quantity * b.price - (a.quantity * a.price);
+});
+```
+
+If you do not want to mutate the original array, use the spread operator to create a copy first:
+
+```typescript
+const sorted = [...sales].sort((a, b) => b.quantity - a.quantity);
+```
+
+### Computing Derived Metrics
+
+Derived metrics are new values computed from existing fields. These are essential for making raw data meaningful:
+
+```typescript
+interface EnrichedSale extends SalesRecord {
+  revenue: number;
+  revenueShare: number;
+  isHighValue: boolean;
+}
+
+function enrichSales(records: SalesRecord[]): EnrichedSale[] {
+  // First pass: compute totals
+  const totalRevenue = records.reduce(
+    (sum, r) => sum + r.quantity * r.price,
+    0
+  );
+
+  // Second pass: add derived fields
+  return records.map((r) => {
+    const revenue = r.quantity * r.price;
+    return {
+      ...r,
+      revenue,
+      revenueShare: totalRevenue > 0 ? revenue / totalRevenue : 0,
+      isHighValue: revenue > 500,
+    };
+  });
+}
+```
+
+Notice the two-pass approach: first compute the total, then use it to calculate each record's share. This is common when derived metrics depend on the full dataset.
+
+### Building Summary Tables
+
+A summary table combines grouping, aggregation, and sorting into a structured report:
+
+```typescript
+interface RegionReport {
+  region: string;
+  productCount: number;
+  totalUnits: number;
+  totalRevenue: number;
+  topProduct: string;
+}
+
+function buildRegionReport(records: SalesRecord[]): RegionReport[] {
+  const byRegion = groupBy(records, "region");
+
+  const report = Object.entries(byRegion).map(([region, items]) => {
+    const totalRevenue = items.reduce(
+      (sum, r) => sum + r.quantity * r.price,
+      0
+    );
+    const totalUnits = items.reduce((sum, r) => sum + r.quantity, 0);
+
+    // Find the product with highest revenue in this region
+    const byProduct = groupBy(items, "product");
+    const productRevenues = Object.entries(byProduct).map(([product, pItems]) => ({
+      product,
+      revenue: pItems.reduce((sum, r) => sum + r.quantity * r.price, 0),
+    }));
+    productRevenues.sort((a, b) => b.revenue - a.revenue);
+
+    return {
+      region,
+      productCount: Object.keys(byProduct).length,
+      totalUnits,
+      totalRevenue,
+      topProduct: productRevenues[0]?.product ?? "N/A",
+    };
+  });
+
+  // Sort report by total revenue descending
+  report.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+  return report;
+}
+```
+
+### Why This Matters for AI Engineering
+
+When you prepare data for an LLM, you rarely send raw rows. Instead, you compute summaries and insights first. For example:
+
+- "The West region generated $10,450 in revenue across 3 products, with Widget as the top seller."
+- "There are 5 products with declining sales quarter-over-quarter."
+
+These computed summaries make your LLM prompts more focused and your AI outputs more useful. Group-by and aggregation are how you get there.
+
+## Common Mistakes
+
+- **Forgetting that `sort` mutates the array.** If you need the original order preserved, sort a copy: `[...arr].sort(...)`.
+- **Not handling empty groups.** If a group has zero items, computing an average by dividing by `.length` produces `NaN`. Always guard against division by zero.
+- **Using `===` to compare numbers that came from strings.** If you forgot to convert CSV string values to numbers, `"10" === 10` is `false` in TypeScript. Ensure your data types are correct before grouping.
+- **Building deeply nested group-by structures.** If you need to group by region, then by product within each region, keep the code flat and readable. Extract helper functions instead of nesting `reduce` calls.
+- **Ignoring the return type of `Object.entries`.** It returns `[string, T[]][]`. Make sure your type annotations account for the string key.
+
+## Your Task
+
+Given an array of sales records, implement: (1) a group-by-product summary showing total quantity, total revenue, and record count per product, (2) sort the results by total revenue in descending order, and (3) compute a revenue share percentage for each product.

@@ -1,0 +1,342 @@
+---
+title: "AI Context Building"
+description: "Learn to build effective prompt context from pipeline data, optimize for context windows, and select the most relevant data for LLM consumption."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 19
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "ai", "context", "prompts", "tokens", "optimization", "llm"]
+---
+
+## What You'll Learn
+
+You will learn how to prepare pipeline data for consumption by an LLM. You will build context from structured data, optimize for context window limits, select the most relevant records to include, and structure your data so the LLM can reason about it effectively. This is the critical link between your data pipeline and your AI application.
+
+## Key Concepts
+
+### The Context Problem
+
+LLMs have limited context windows. Even large models have practical limits on how much data you can include in a prompt. If your pipeline produces 10,000 records, you cannot send them all. You need to:
+
+1. **Select** the most relevant records
+2. **Summarize** where possible
+3. **Format** data for LLM comprehension
+4. **Measure** token usage to stay within limits
+
+### Estimating Token Usage
+
+Before you can optimize, you need to measure. A rough rule of thumb: 1 token is approximately 4 characters in English text. For structured data, it is closer to 3 characters per token because of formatting overhead.
+
+```typescript
+function estimateTokens(text: string): number {
+  // Rough estimation: ~4 characters per token for English
+  // Structured data (JSON, tables) uses more tokens per character
+  return Math.ceil(text.length / 3.5);
+}
+
+interface TokenBudget {
+  total: number;        // Max tokens for the entire prompt
+  systemPrompt: number; // Reserved for system prompt
+  userQuery: number;    // Reserved for the user's question
+  context: number;      // Available for data context
+  response: number;     // Reserved for the model's response
+}
+
+function calculateBudget(
+  maxTokens: number,
+  systemPromptLength: number,
+  userQueryLength: number,
+  responseReserve: number = 2000
+): TokenBudget {
+  const systemPrompt = estimateTokens(systemPromptLength.toString());
+  const userQuery = estimateTokens(userQueryLength.toString());
+
+  return {
+    total: maxTokens,
+    systemPrompt,
+    userQuery,
+    response: responseReserve,
+    context: maxTokens - systemPrompt - userQuery - responseReserve,
+  };
+}
+```
+
+### Relevance Scoring
+
+Not all records are equally relevant to a user's query. Score records and include only the most relevant:
+
+```typescript
+interface ScoredRecord<T> {
+  record: T;
+  score: number;
+  reasons: string[];
+}
+
+function scoreRelevance<T extends Record<string, unknown>>(
+  records: T[],
+  query: string,
+  config: {
+    textFields: string[];       // Fields to match against the query
+    boostFields?: Record<string, number>;  // Field-level importance weights
+    recencyField?: string;      // Boost recent records
+  }
+): ScoredRecord<T>[] {
+  const queryTerms = query.toLowerCase().split(/\s+/);
+
+  return records.map((record) => {
+    let score = 0;
+    const reasons: string[] = [];
+
+    // Text relevance
+    for (const field of config.textFields) {
+      const value = String(record[field] ?? "").toLowerCase();
+      const boost = config.boostFields?.[field] ?? 1;
+
+      for (const term of queryTerms) {
+        if (value.includes(term)) {
+          score += boost;
+          reasons.push(`"${term}" found in ${field}`);
+        }
+      }
+    }
+
+    // Recency boost
+    if (config.recencyField) {
+      const dateValue = record[config.recencyField];
+      if (dateValue) {
+        const age = Date.now() - new Date(String(dateValue)).getTime();
+        const daysOld = age / (1000 * 60 * 60 * 24);
+        if (daysOld < 7) {
+          score += 2;
+          reasons.push("recent (< 7 days)");
+        } else if (daysOld < 30) {
+          score += 1;
+          reasons.push("recent (< 30 days)");
+        }
+      }
+    }
+
+    return { record, score, reasons };
+  });
+}
+
+function selectTopRecords<T>(
+  scored: ScoredRecord<T>[],
+  maxRecords: number
+): T[] {
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxRecords)
+    .map((s) => s.record);
+}
+```
+
+### Formatting Data for LLMs
+
+How you format data affects how well the LLM understands it. Different formats work better for different tasks:
+
+```typescript
+type ContextFormat = "table" | "json" | "narrative" | "bullet";
+
+function formatForLLM<T extends Record<string, unknown>>(
+  records: T[],
+  format: ContextFormat,
+  columns?: string[]
+): string {
+  const cols = columns ?? (records.length > 0 ? Object.keys(records[0]) : []);
+
+  switch (format) {
+    case "table": {
+      // Markdown table -- good for structured comparisons
+      const header = `| ${cols.join(" | ")} |`;
+      const separator = `| ${cols.map(() => "---").join(" | ")} |`;
+      const rows = records.map(
+        (r) => `| ${cols.map((c) => String(r[c] ?? "")).join(" | ")} |`
+      );
+      return [header, separator, ...rows].join("\n");
+    }
+
+    case "json": {
+      // JSON -- good for precise, structured data
+      const slim = records.map((r) =>
+        Object.fromEntries(cols.map((c) => [c, r[c]]))
+      );
+      return JSON.stringify(slim, null, 2);
+    }
+
+    case "narrative": {
+      // Natural language -- good for small datasets and context
+      return records
+        .map((r, i) => {
+          const parts = cols.map((c) => `${c}: ${r[c]}`);
+          return `Record ${i + 1}: ${parts.join(", ")}`;
+        })
+        .join("\n");
+    }
+
+    case "bullet": {
+      // Bullet points -- good for lists and summaries
+      return records
+        .map((r) => {
+          const main = String(r[cols[0]] ?? "");
+          const details = cols
+            .slice(1)
+            .map((c) => `${c}: ${r[c]}`)
+            .join(", ");
+          return `- **${main}**: ${details}`;
+        })
+        .join("\n");
+    }
+  }
+}
+```
+
+### Building the Full Context
+
+Assemble the complete prompt context with data, summaries, and instructions:
+
+```typescript
+interface ContextConfig {
+  maxTokens: number;
+  format: ContextFormat;
+  includesSummary: boolean;
+  query: string;
+  systemPrompt: string;
+}
+
+function buildLLMContext<T extends Record<string, unknown>>(
+  records: T[],
+  config: ContextConfig
+): {
+  context: string;
+  tokensUsed: number;
+  recordsIncluded: number;
+  recordsOmitted: number;
+} {
+  const parts: string[] = [];
+
+  // Add summary if requested
+  if (config.includesSummary) {
+    const summary = buildDataSummary(records);
+    parts.push("## Data Summary");
+    parts.push(summary);
+    parts.push("");
+  }
+
+  // Score and select relevant records
+  const scored = scoreRelevance(records, config.query, {
+    textFields: Object.keys(records[0] ?? {}),
+  });
+
+  // Start with all records and trim until within budget
+  const budget = config.maxTokens - estimateTokens(config.systemPrompt) - 2000;
+  let selectedRecords = scored
+    .sort((a, b) => b.score - a.score)
+    .map((s) => s.record);
+
+  let formattedData = formatForLLM(selectedRecords, config.format);
+  let tokensUsed = estimateTokens(formattedData);
+
+  // Trim records until we fit in the budget
+  while (tokensUsed > budget && selectedRecords.length > 1) {
+    selectedRecords = selectedRecords.slice(
+      0,
+      Math.floor(selectedRecords.length * 0.8)
+    );
+    formattedData = formatForLLM(selectedRecords, config.format);
+    tokensUsed = estimateTokens(formattedData);
+  }
+
+  parts.push("## Relevant Data");
+  parts.push(formattedData);
+
+  if (selectedRecords.length < records.length) {
+    parts.push(
+      `\n*Showing ${selectedRecords.length} of ${records.length} records (most relevant to your query)*`
+    );
+  }
+
+  const context = parts.join("\n");
+
+  return {
+    context,
+    tokensUsed: estimateTokens(context),
+    recordsIncluded: selectedRecords.length,
+    recordsOmitted: records.length - selectedRecords.length,
+  };
+}
+
+function buildDataSummary<T extends Record<string, unknown>>(
+  records: T[]
+): string {
+  const lines: string[] = [];
+  lines.push(`- Total records: ${records.length}`);
+
+  // Auto-detect numeric fields and compute stats
+  if (records.length > 0) {
+    for (const key of Object.keys(records[0])) {
+      const values = records.map((r) => r[key]);
+      const numericValues = values
+        .map((v) => Number(v))
+        .filter((n) => !isNaN(n));
+
+      if (numericValues.length === values.length && numericValues.length > 0) {
+        const sum = numericValues.reduce((a, b) => a + b, 0);
+        const avg = sum / numericValues.length;
+        const min = Math.min(...numericValues);
+        const max = Math.max(...numericValues);
+        lines.push(
+          `- ${key}: min=${min}, max=${max}, avg=${avg.toFixed(1)}, sum=${sum}`
+        );
+      } else {
+        // Count distinct values for categorical fields
+        const distinct = new Set(values.map(String)).size;
+        lines.push(`- ${key}: ${distinct} distinct values`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+```
+
+### Choosing the Right Format
+
+Different formats have different token efficiencies and comprehension characteristics:
+
+```typescript
+function recommendFormat(context: {
+  recordCount: number;
+  columnCount: number;
+  task: "comparison" | "analysis" | "search" | "summary";
+}): ContextFormat {
+  if (context.recordCount <= 5) return "narrative";
+  if (context.task === "comparison") return "table";
+  if (context.task === "analysis" && context.columnCount > 5) return "json";
+  if (context.task === "search") return "bullet";
+  return "table"; // Default
+}
+```
+
+### Why This Matters for AI Engineering
+
+Context building is the most directly impactful skill for AI applications:
+
+1. **Quality in, quality out**: The LLM's response quality is directly proportional to the quality and relevance of the context you provide
+2. **Cost efficiency**: Including 1,000 irrelevant records wastes tokens and money. Including 20 relevant records is both cheaper and produces better results
+3. **Context window management**: Models have limits. Knowing how to estimate tokens and trim data keeps you within bounds
+4. **Format matters**: A well-formatted table helps the LLM understand relationships between fields. A JSON blob of the same data may not
+
+## Common Mistakes
+
+- **Including all data regardless of relevance.** More data is not better. Relevant data is better. Score and select.
+- **Not estimating token usage.** If your context exceeds the model's limit, the API call fails or the data gets truncated unpredictably. Always estimate and trim proactively.
+- **Using the wrong format.** JSON is precise but token-heavy. Tables are efficient but hard for complex nested data. Match format to task.
+- **Forgetting to include a summary.** A brief summary at the top helps the LLM orient itself before diving into the detailed data.
+- **Not telling the LLM about omissions.** If you only included 50 of 5,000 records, tell the model. Otherwise it might assume the 50 records are the complete dataset.
+
+## Your Task
+
+Build a context builder that takes an array of records and a user query, scores records for relevance, selects the top records within a token budget, formats them for LLM consumption, and returns the formatted context along with token usage statistics. Test with different formats and verify the output stays within the token budget.

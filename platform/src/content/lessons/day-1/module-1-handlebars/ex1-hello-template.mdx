@@ -1,0 +1,114 @@
+---
+title: "Hello Template"
+description: "Introduction to Handlebars template syntax, the compile-execute pattern, and why templates matter for AI engineering."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 1
+difficulty: "beginner"
+estimatedMinutes: 10
+isFree: true
+tags: ["handlebars", "templates", "compile", "variables", "introduction"]
+---
+
+## What You'll Learn
+
+You will learn the fundamental Handlebars template syntax, understand the compile-then-execute pattern, and see why dynamic templates are essential for building AI-powered applications.
+
+## Key Concepts
+
+### What Is a Template?
+
+A template is a string with placeholders. You write the structure once, then fill in the blanks with different data each time. Think of it like a form letter: the layout stays the same, but the name and details change for each recipient.
+
+In AI engineering, templates are how you build **dynamic prompts**. Instead of hardcoding every prompt you send to an LLM, you create a template and inject context at runtime. This is the foundation of every production AI system.
+
+### What Is Handlebars?
+
+Handlebars is a popular templating language available in many programming languages. It uses double curly braces `{{ }}` (which look like handlebars on a bicycle) to mark where dynamic values should be inserted.
+
+Here is the simplest possible Handlebars template:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile("Hello, {{name}}!");
+const result = template({ name: "World" });
+
+console.log(result); // "Hello, World!"
+```
+
+That is the entire pattern: **compile** a template string, then **execute** it with data.
+
+### The Compile-Execute Pattern
+
+Handlebars works in two steps:
+
+**Step 1: Compile** -- Turn a template string into a reusable function.
+
+```typescript
+const templateFn = Handlebars.compile("You are a {{role}} assistant.");
+```
+
+The `compile` method parses your template and returns a function. This function is now ready to accept data.
+
+**Step 2: Execute** -- Call that function with a data object (called the "context").
+
+```typescript
+const output = templateFn({ role: "helpful" });
+// "You are a helpful assistant."
+```
+
+The context object provides values for every `{{placeholder}}` in your template. Handlebars looks up each placeholder name as a key in the context object.
+
+### Why Two Steps?
+
+Splitting compile and execute has a real performance benefit. You compile once, then execute many times with different data:
+
+```typescript
+const promptTemplate = Handlebars.compile(
+  "Summarize the following {{docType}} in {{language}}: {{content}}"
+);
+
+// Same template, different data each time
+const result1 = promptTemplate({
+  docType: "email",
+  language: "English",
+  content: "Meeting at 3pm tomorrow...",
+});
+
+const result2 = promptTemplate({
+  docType: "article",
+  language: "Spanish",
+  content: "The new policy changes...",
+});
+```
+
+In a production AI system, you might compile your prompt templates once at startup and then execute them thousands of times per second with different user inputs.
+
+### Why Templates Matter for AI Engineering
+
+When you build applications that call LLMs (like GPT-4 or Claude), you construct prompts dynamically. A chatbot might need to include the user's name, their conversation history, and system instructions -- all assembled at runtime. Templates give you:
+
+1. **Separation of concerns** -- Your prompt structure lives in one place; your data lives elsewhere.
+2. **Reusability** -- The same template works for every user.
+3. **Testability** -- You can test your templates with mock data before connecting to an LLM.
+4. **Readability** -- A template reads like the final output, making it easy to review and iterate.
+
+```typescript
+// Without templates (messy string concatenation)
+const prompt = "You are a " + role + " assistant. The user's name is " + name + ". " + instructions;
+
+// With templates (clean and readable)
+const prompt = templateFn({ role, name, instructions });
+```
+
+## Common Mistakes
+
+- **Forgetting to call `compile` first.** You cannot use a raw string as a template function. Always compile it first: `Handlebars.compile(str)` returns the function you need.
+- **Misspelling variable names.** If your template says `{{naem}}` but your context has `{ name: "Alice" }`, Handlebars will silently output an empty string -- no error, no warning.
+- **Passing a non-object as context.** The context must be a plain object. Passing a string or number directly will not work as expected.
+- **Confusing compile-time and run-time.** The template string is fixed at compile time. The data is provided at run time. You cannot change the template structure by passing different data.
+
+## Your Task
+
+Write a Handlebars template that takes a `name` variable and produces a greeting. Compile it, execute it with a context object, and verify the output matches the expected string.

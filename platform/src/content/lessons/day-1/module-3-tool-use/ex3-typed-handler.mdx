@@ -1,0 +1,221 @@
+---
+title: "Type-Safe Tool Handlers"
+description: "Use TypeScript discriminated unions and type-safe dispatch patterns to handle tool calls without runtime surprises."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 3
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["tools", "function-calling", "typescript", "discriminated-unions", "type-safety"]
+---
+
+## What You'll Learn
+
+- How to define TypeScript types for each tool's inputs
+- Using discriminated unions to handle multiple tool types safely
+- Switch/case patterns that give you compile-time exhaustiveness checking
+- Avoiding `any` and `unknown` casts in your tool handlers
+
+## Key Concepts
+
+### The Problem: Untyped Tool Inputs
+
+When Claude calls a tool, the `input` field is typed as `unknown`. Without proper typing, you end up casting everywhere:
+
+```typescript
+// Fragile -- no type checking on the input shape
+function handleTool(name: string, input: unknown): string {
+  if (name === "get_weather") {
+    const args = input as { city: string }; // dangerous cast!
+    return fetchWeather(args.city);
+  }
+  return "Unknown tool";
+}
+```
+
+If the schema changes or Claude sends unexpected data, this code fails silently. Let's fix that with proper types.
+
+### Defining Input Types
+
+Start by creating a type for each tool's expected input:
+
+```typescript
+// One type per tool
+interface GetWeatherInput {
+  city: string;
+  units?: "celsius" | "fahrenheit";
+}
+
+interface SearchDocsInput {
+  query: string;
+  limit?: number;
+}
+
+interface CreateReminderInput {
+  message: string;
+  time: string;
+}
+```
+
+### Discriminated Unions for Tool Calls
+
+A discriminated union uses a shared property (the "discriminant") to distinguish between types. The tool `name` is a perfect discriminant:
+
+```typescript
+type ToolCall =
+  | { name: "get_weather"; input: GetWeatherInput }
+  | { name: "search_docs"; input: SearchDocsInput }
+  | { name: "create_reminder"; input: CreateReminderInput };
+```
+
+Now TypeScript knows that when `name` is `"get_weather"`, the `input` is `GetWeatherInput`. No casting needed.
+
+### Type-Safe Switch/Case
+
+Use a `switch` statement on the discriminant. TypeScript narrows the type in each case branch automatically:
+
+```typescript
+function handleToolCall(toolCall: ToolCall): string {
+  switch (toolCall.name) {
+    case "get_weather": {
+      // TypeScript knows: toolCall.input is GetWeatherInput
+      const { city, units } = toolCall.input;
+      return fetchWeather(city, units ?? "celsius");
+    }
+    case "search_docs": {
+      // TypeScript knows: toolCall.input is SearchDocsInput
+      const { query, limit } = toolCall.input;
+      return searchDocs(query, limit ?? 5);
+    }
+    case "create_reminder": {
+      // TypeScript knows: toolCall.input is CreateReminderInput
+      const { message, time } = toolCall.input;
+      return createReminder(message, time);
+    }
+  }
+}
+```
+
+### Exhaustiveness Checking
+
+Add a default case that catches unhandled tools at compile time:
+
+```typescript
+function assertNever(value: never): never {
+  throw new Error(`Unhandled tool: ${JSON.stringify(value)}`);
+}
+
+function handleToolCall(toolCall: ToolCall): string {
+  switch (toolCall.name) {
+    case "get_weather":
+      return fetchWeather(toolCall.input.city);
+    case "search_docs":
+      return searchDocs(toolCall.input.query);
+    case "create_reminder":
+      return createReminder(toolCall.input.message, toolCall.input.time);
+    default:
+      // If you add a new tool to the union but forget to handle it,
+      // TypeScript will error here at compile time
+      return assertNever(toolCall);
+  }
+}
+```
+
+### Converting API Responses to Typed Calls
+
+Bridge the gap between the untyped API response and your typed handler:
+
+```typescript
+function parseToolCall(block: Anthropic.ToolUseBlock): ToolCall {
+  const { name, input } = block;
+
+  switch (name) {
+    case "get_weather":
+      return { name, input: input as GetWeatherInput };
+    case "search_docs":
+      return { name, input: input as SearchDocsInput };
+    case "create_reminder":
+      return { name, input: input as CreateReminderInput };
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+}
+
+// Usage in the tool loop
+for (const block of response.content) {
+  if (block.type === "tool_use") {
+    const typedCall = parseToolCall(block);
+    const result = handleToolCall(typedCall);
+    // ... send result back
+  }
+}
+```
+
+This keeps the `as` cast in exactly one place (the parser), and everything downstream is fully typed.
+
+### Putting It All Together
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+// 1. Define input types
+interface GetWeatherInput {
+  city: string;
+}
+
+interface SearchDocsInput {
+  query: string;
+  limit?: number;
+}
+
+// 2. Create the discriminated union
+type ToolCall =
+  | { name: "get_weather"; input: GetWeatherInput }
+  | { name: "search_docs"; input: SearchDocsInput };
+
+// 3. Type-safe handler
+function handleToolCall(toolCall: ToolCall): string {
+  switch (toolCall.name) {
+    case "get_weather":
+      return JSON.stringify({ city: toolCall.input.city, temp: 20 });
+    case "search_docs":
+      return JSON.stringify({ results: [`Result for "${toolCall.input.query}"`] });
+  }
+}
+
+// 4. Parser (the only place we cast)
+function parseToolCall(block: Anthropic.ToolUseBlock): ToolCall {
+  switch (block.name) {
+    case "get_weather":
+      return { name: block.name, input: block.input as GetWeatherInput };
+    case "search_docs":
+      return { name: block.name, input: block.input as SearchDocsInput };
+    default:
+      throw new Error(`Unknown tool: ${block.name}`);
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Casting `input` as `any`** -- This defeats the purpose of TypeScript. Use specific interfaces instead.
+
+2. **Forgetting to update the union** -- When you add a new tool, add it to both the union type and the switch statement. The `assertNever` pattern catches this at compile time.
+
+3. **Not validating at the boundary** -- The `parseToolCall` function is a trust boundary. In production, you might want runtime validation here too (see Exercise 5 on Zod validation).
+
+4. **Using `if/else` chains instead of `switch`** -- TypeScript's type narrowing works better with `switch` on discriminated unions. It also makes exhaustiveness checking easier.
+
+5. **Duplicating the tool name string** -- Keep tool names as constants to avoid typos:
+
+```typescript
+const TOOL_NAMES = {
+  WEATHER: "get_weather",
+  SEARCH: "search_docs",
+} as const;
+```
+
+## Your Task
+
+Define three tools: `get_stock_price` (takes a `ticker` string), `convert_currency` (takes `amount`, `from`, and `to`), and `get_exchange_rate` (takes `from` and `to`). Create TypeScript interfaces for each tool's input, build a discriminated union, and write a type-safe handler using switch/case with exhaustiveness checking. Include the `parseToolCall` bridge function.

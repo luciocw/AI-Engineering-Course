@@ -1,0 +1,358 @@
+---
+title: "Few-Shot Prompting: Teaching by Example"
+description: "Learn zero-shot vs few-shot prompting, how to provide examples, format selection, and compare performance between approaches."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 11
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["llm", "api", "few-shot", "zero-shot", "prompting", "examples", "prompt-engineering"]
+---
+
+## What You'll Learn
+
+- The difference between zero-shot and few-shot prompting
+- How to select and format effective examples
+- When few-shot prompting helps (and when it does not)
+- How to measure the performance improvement from examples
+
+## Key Concepts
+
+### Zero-Shot vs Few-Shot
+
+**Zero-shot** means asking the model to perform a task with no examples -- just instructions. **Few-shot** means providing examples of the desired input-output behavior before giving the actual input.
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// Zero-shot: Just instructions, no examples
+async function zeroShotClassify(text: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 20,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Classify this customer feedback as "positive", "negative", or "neutral":
+
+"${text}"
+
+Classification:`,
+      },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text.trim() : "";
+}
+
+// Few-shot: Instructions + examples
+async function fewShotClassify(text: string): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 20,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Classify customer feedback as "positive", "negative", or "neutral".
+
+Examples:
+Input: "This product changed my life! Best purchase ever."
+Classification: positive
+
+Input: "Completely broken on arrival. Want a refund."
+Classification: negative
+
+Input: "It works as described. Nothing more to say."
+Classification: neutral
+
+Input: "Love the design but the battery is terrible."
+Classification: negative
+
+Now classify this:
+Input: "${text}"
+Classification:`,
+      },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text.trim() : "";
+}
+```
+
+### Why Few-Shot Works
+
+Few-shot examples do several things:
+
+1. **Define the format**: The model sees exactly what output looks like
+2. **Set the boundary**: Examples show where categories begin and end
+3. **Handle ambiguity**: Edge cases in examples teach the model your interpretation
+4. **Reduce hallucination**: Concrete examples ground the model's behavior
+
+The difference can be dramatic. A zero-shot classifier might return "The sentiment is positive" when you wanted just "positive." Few-shot examples make the expected format crystal clear.
+
+### Choosing Good Examples
+
+Not all examples are equally useful. Here are the principles:
+
+```typescript
+interface FewShotExample {
+  input: string;
+  output: string;
+  category?: string; // For tracking coverage
+}
+
+// Principle 1: Cover all categories
+const balancedExamples: FewShotExample[] = [
+  { input: "Absolutely love it!", output: "positive", category: "positive" },
+  { input: "Total waste of money.", output: "negative", category: "negative" },
+  { input: "It's okay, does what it says.", output: "neutral", category: "neutral" },
+];
+
+// Principle 2: Include edge cases / boundary examples
+const edgeCaseExamples: FewShotExample[] = [
+  ...balancedExamples,
+  // Mixed sentiment - teaches the model your decision rule
+  {
+    input: "Great features but poor build quality.",
+    output: "negative",
+    category: "negative",
+  },
+  // Sarcasm - shows how to handle it
+  {
+    input: "Oh wonderful, it broke on day one. Just what I needed.",
+    output: "negative",
+    category: "negative",
+  },
+  // Subtle positive
+  {
+    input: "Does exactly what I needed, nothing more.",
+    output: "neutral",
+    category: "neutral",
+  },
+];
+
+// Principle 3: Match the complexity of your actual inputs
+// If your real data is long paragraphs, don't use one-word examples
+```
+
+### Formatting Examples Effectively
+
+There are several ways to format few-shot examples. The best format depends on your task:
+
+```typescript
+// Format 1: Simple input/output pairs
+function formatSimple(examples: FewShotExample[]): string {
+  return examples
+    .map((ex) => `Input: ${ex.input}\nOutput: ${ex.output}`)
+    .join("\n\n");
+}
+
+// Format 2: XML-tagged examples (best for complex tasks)
+function formatXml(examples: FewShotExample[]): string {
+  const formatted = examples
+    .map(
+      (ex) => `<example>
+<input>${ex.input}</input>
+<output>${ex.output}</output>
+</example>`
+    )
+    .join("\n");
+
+  return `<examples>\n${formatted}\n</examples>`;
+}
+
+// Format 3: Conversation-style (simulates multi-turn)
+function formatConversation(
+  examples: FewShotExample[]
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+  for (const ex of examples) {
+    messages.push({ role: "user", content: ex.input });
+    messages.push({ role: "assistant", content: ex.output });
+  }
+
+  return messages;
+}
+
+// Using conversation-style with the API
+async function fewShotViaMessages(
+  examples: FewShotExample[],
+  input: string
+): Promise<string> {
+  const exampleMessages = formatConversation(examples);
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 100,
+    temperature: 0,
+    system: "Classify customer feedback as positive, negative, or neutral. Respond with only the classification.",
+    messages: [
+      ...exampleMessages,
+      { role: "user", content: input },
+    ],
+  });
+
+  return response.content[0].type === "text" ? response.content[0].text.trim() : "";
+}
+```
+
+### How Many Examples?
+
+More is not always better. Research and practice suggest:
+
+```typescript
+// Rule of thumb for number of examples:
+// 2-3 examples: Sufficient for simple classification
+// 5-8 examples: Good for nuanced tasks
+// 10+ examples: Diminishing returns, and uses more tokens (cost)
+
+// The key is diversity, not quantity
+function selectExamples(
+  pool: FewShotExample[],
+  count: number
+): FewShotExample[] {
+  // Ensure category coverage first
+  const categories = [...new Set(pool.map((ex) => ex.category))];
+  const selected: FewShotExample[] = [];
+
+  // Pick at least one from each category
+  for (const category of categories) {
+    const example = pool.find(
+      (ex) => ex.category === category && !selected.includes(ex)
+    );
+    if (example) selected.push(example);
+  }
+
+  // Fill remaining slots with diverse examples
+  while (selected.length < count) {
+    const remaining = pool.filter((ex) => !selected.includes(ex));
+    if (remaining.length === 0) break;
+    selected.push(remaining[0]);
+  }
+
+  return selected;
+}
+```
+
+### Measuring Few-Shot Performance
+
+Compare zero-shot and few-shot on the same test set:
+
+```typescript
+interface TestCase {
+  input: string;
+  expectedOutput: string;
+}
+
+interface BenchmarkResult {
+  approach: string;
+  accuracy: number;
+  totalTests: number;
+  correct: number;
+  avgLatencyMs: number;
+  avgTokens: number;
+}
+
+async function benchmarkApproaches(
+  testCases: TestCase[],
+  approaches: Record<string, (input: string) => Promise<string>>
+): Promise<BenchmarkResult[]> {
+  const results: BenchmarkResult[] = [];
+
+  for (const [name, classify] of Object.entries(approaches)) {
+    let correct = 0;
+    let totalLatency = 0;
+    let totalTokens = 0;
+
+    for (const test of testCases) {
+      const startTime = Date.now();
+      const result = await classify(test.input);
+      totalLatency += Date.now() - startTime;
+
+      // Normalize comparison (lowercase, trim)
+      if (result.toLowerCase().trim() === test.expectedOutput.toLowerCase().trim()) {
+        correct++;
+      } else {
+        console.log(
+          `${name} WRONG: "${test.input}" -> "${result}" (expected "${test.expectedOutput}")`
+        );
+      }
+    }
+
+    results.push({
+      approach: name,
+      accuracy: correct / testCases.length,
+      totalTests: testCases.length,
+      correct,
+      avgLatencyMs: totalLatency / testCases.length,
+      avgTokens: 0, // Track from response.usage if desired
+    });
+  }
+
+  return results;
+}
+
+// Run the benchmark
+const testCases: TestCase[] = [
+  { input: "Best product I've ever bought!", expectedOutput: "positive" },
+  { input: "Doesn't work at all. Returning it.", expectedOutput: "negative" },
+  { input: "It's fine for the price.", expectedOutput: "neutral" },
+  { input: "Amazing features, horrible support.", expectedOutput: "negative" },
+  { input: "Meh.", expectedOutput: "neutral" },
+];
+
+const results = await benchmarkApproaches(testCases, {
+  "zero-shot": zeroShotClassify,
+  "few-shot-3": (input) => fewShotClassify(input),
+});
+
+console.table(results);
+```
+
+### When Few-Shot Helps Most
+
+Few-shot is most valuable when:
+
+- The task has specific formatting requirements
+- Categories have subtle boundaries (e.g., "neutral" vs "mixed")
+- The model needs to follow a specific decision rule (e.g., "mixed sentiment defaults to negative")
+- Your use case differs from common patterns the model was trained on
+
+Few-shot is less necessary when:
+
+- The task is straightforward and well-defined
+- The model already handles the task well zero-shot
+- Adding examples would make the prompt too expensive (thousands of calls per day)
+
+## Common Mistakes
+
+1. **Examples that contradict each other**: If one example classifies "okay" as neutral and another classifies "it's fine" as positive, the model will be confused. Be consistent.
+
+2. **All examples from the same category**: If you provide 5 positive examples and 1 negative, the model will be biased toward positive. Balance your examples across categories.
+
+3. **Examples that are too different from real data**: If your examples are short and clean but real inputs are long and messy, the model will not generalize well. Use realistic examples.
+
+4. **Too many examples**: Beyond 8-10 examples, you are spending a lot of tokens with diminishing returns. Measure whether additional examples actually improve accuracy.
+
+5. **Not measuring the improvement**: Always benchmark few-shot against zero-shot. Sometimes zero-shot is good enough, and the extra tokens from examples are wasted money.
+
+## Your Task
+
+Build a few-shot classification system that:
+
+1. Defines a classification task (e.g., support ticket routing, email priority, content categorization)
+2. Creates a pool of at least 10 labeled examples covering all categories
+3. Implements both zero-shot and few-shot versions of the classifier
+4. Implements the conversation-style few-shot approach using message alternation
+5. Creates a test set of at least 8 test cases with expected labels
+6. Benchmarks zero-shot vs few-shot (3 examples) vs few-shot (6 examples) and reports accuracy
+
+Print a comparison table showing accuracy, average latency, and token usage for each approach.
+
+Bonus: Implement an `selectBestExamples` function that tries different example subsets and identifies which set of N examples produces the highest accuracy on the test set.

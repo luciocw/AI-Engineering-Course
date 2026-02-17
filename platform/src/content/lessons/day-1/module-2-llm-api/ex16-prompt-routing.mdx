@@ -1,0 +1,404 @@
+---
+title: "Prompt Routing: Intent-Based Dispatch"
+description: "Learn intent classification, dispatching to specialized prompts, the router pattern, and fallback handling strategies."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 16
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "routing", "intent-classification", "dispatch", "architecture", "fallback"]
+---
+
+## What You'll Learn
+
+- The router pattern for LLM applications
+- How to classify user intent and dispatch to specialized prompts
+- Building a flexible routing system
+- Fallback handling for unrecognized intents
+- When routing improves quality and cost efficiency
+
+## Key Concepts
+
+### What Is Prompt Routing?
+
+Prompt routing is the pattern where a fast, cheap classifier determines what the user wants, and then dispatches the request to a specialized prompt designed for that specific task.
+
+Think of it like a phone tree: "Press 1 for billing, 2 for technical support, 3 for account management." Except the LLM automatically figures out which "button" to press.
+
+```
+User Input
+    ↓
+[Router: Classify Intent] (cheap, fast model)
+    ↓
+    ├── billing → Billing Specialist Prompt
+    ├── technical → Technical Support Prompt
+    ├── account → Account Management Prompt
+    └── unknown → General Assistant + Escalation
+```
+
+### Why Route?
+
+A single general-purpose prompt tries to be good at everything and ends up mediocre at everything. Specialized prompts are:
+
+- **More accurate**: Each prompt is tuned for one specific task
+- **Cheaper**: You can use simpler models for simple intents
+- **Easier to maintain**: Change the billing prompt without affecting technical support
+- **Better for users**: More focused, relevant responses
+
+### Building the Router
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+// Step 1: Define your intents
+type Intent = "billing" | "technical" | "account" | "general" | "unknown";
+
+// Step 2: Build the intent classifier
+async function classifyIntent(userMessage: string): Promise<{
+  intent: Intent;
+  confidence: number;
+}> {
+  const response = await client.messages.create({
+    model: "claude-haiku-3-5", // Fast, cheap model for routing
+    max_tokens: 50,
+    temperature: 0,
+    system: `You are an intent classifier. Classify user messages into one of these categories:
+- billing: questions about charges, payments, refunds, pricing, plans
+- technical: bugs, errors, crashes, feature issues, how-to questions about product features
+- account: login issues, password resets, profile changes, account settings
+- general: greetings, feedback, feature requests, anything that doesn't fit above
+
+Respond with JSON only: {"intent": "category", "confidence": 0.X}`,
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  try {
+    const parsed = JSON.parse(text);
+    return {
+      intent: parsed.intent as Intent,
+      confidence: parsed.confidence ?? 0.5,
+    };
+  } catch {
+    return { intent: "unknown", confidence: 0 };
+  }
+}
+```
+
+### Specialized Prompt Handlers
+
+```typescript
+interface RouteHandler {
+  intent: Intent;
+  systemPrompt: string;
+  model: string;
+  maxTokens: number;
+  temperature: number;
+}
+
+const routeHandlers: Record<Intent, RouteHandler> = {
+  billing: {
+    intent: "billing",
+    systemPrompt: `You are a billing specialist for a SaaS company.
+
+You can help with:
+- Explaining charges and invoices
+- Processing refund requests (collect details, do not actually process)
+- Comparing plan options and pricing
+- Resolving payment issues
+
+Rules:
+- Always verify the customer's concern before offering solutions
+- For refund requests, collect: order date, amount, reason
+- Quote specific plan prices when comparing options
+- If you cannot resolve the issue, offer to escalate to the billing team`,
+    model: "claude-sonnet-4-20250514",
+    maxTokens: 512,
+    temperature: 0.3,
+  },
+
+  technical: {
+    intent: "technical",
+    systemPrompt: `You are a technical support engineer.
+
+You can help with:
+- Diagnosing bugs and errors
+- Providing workarounds for known issues
+- Walking users through troubleshooting steps
+- Explaining how features work
+
+Rules:
+- Ask clarifying questions: OS, browser, error messages
+- Provide step-by-step troubleshooting instructions
+- Suggest workarounds before escalating
+- If the issue seems like a bug, collect reproduction steps`,
+    model: "claude-sonnet-4-20250514",
+    maxTokens: 1024,
+    temperature: 0.2,
+  },
+
+  account: {
+    intent: "account",
+    systemPrompt: `You are an account management assistant.
+
+You can help with:
+- Password reset instructions
+- Profile and settings changes
+- Team member management
+- Account security questions
+
+Rules:
+- Never share account details in the response
+- For password resets, provide step-by-step instructions
+- For security-sensitive changes, recommend verification steps
+- Be extra cautious with account deletion requests`,
+    model: "claude-haiku-3-5", // Simpler tasks, cheaper model
+    maxTokens: 512,
+    temperature: 0.2,
+  },
+
+  general: {
+    intent: "general",
+    systemPrompt: `You are a friendly customer service representative.
+
+You handle general inquiries:
+- Greetings and small talk
+- Product feedback and feature requests
+- Questions about the company
+- Anything that doesn't fit specific categories
+
+Rules:
+- Be warm and conversational
+- For feature requests, acknowledge and note them
+- For complaints, empathize before responding
+- Offer to connect with a specialist if needed`,
+    model: "claude-haiku-3-5",
+    maxTokens: 256,
+    temperature: 0.5,
+  },
+
+  unknown: {
+    intent: "unknown",
+    systemPrompt: `You are a helpful assistant. The user's request did not match any specific category. Try to help them or ask a clarifying question to understand what they need.`,
+    model: "claude-sonnet-4-20250514",
+    maxTokens: 256,
+    temperature: 0.3,
+  },
+};
+```
+
+### The Router Class
+
+```typescript
+interface RoutingResult {
+  intent: Intent;
+  confidence: number;
+  response: string;
+  model: string;
+  totalTokens: { input: number; output: number };
+  routingLatencyMs: number;
+  responseLatencyMs: number;
+}
+
+class PromptRouter {
+  private client: Anthropic;
+  private handlers: Record<Intent, RouteHandler>;
+  private confidenceThreshold: number;
+
+  constructor(config: {
+    handlers: Record<Intent, RouteHandler>;
+    confidenceThreshold?: number;
+  }) {
+    this.client = new Anthropic();
+    this.handlers = config.handlers;
+    this.confidenceThreshold = config.confidenceThreshold ?? 0.5;
+  }
+
+  async route(userMessage: string): Promise<RoutingResult> {
+    // Step 1: Classify intent
+    const routingStart = Date.now();
+    const { intent, confidence } = await classifyIntent(userMessage);
+    const routingLatency = Date.now() - routingStart;
+
+    // Step 2: Select handler (use fallback for low confidence)
+    const effectiveIntent =
+      confidence >= this.confidenceThreshold ? intent : "unknown";
+    const handler = this.handlers[effectiveIntent];
+
+    // Step 3: Execute specialized prompt
+    const responseStart = Date.now();
+    const response = await this.client.messages.create({
+      model: handler.model,
+      max_tokens: handler.maxTokens,
+      temperature: handler.temperature,
+      system: handler.systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+    });
+    const responseLatency = Date.now() - responseStart;
+
+    const text =
+      response.content[0].type === "text" ? response.content[0].text : "";
+
+    return {
+      intent: effectiveIntent,
+      confidence,
+      response: text,
+      model: handler.model,
+      totalTokens: {
+        input: response.usage.input_tokens,
+        output: response.usage.output_tokens,
+      },
+      routingLatencyMs: routingLatency,
+      responseLatencyMs: responseLatency,
+    };
+  }
+}
+
+// Usage
+const router = new PromptRouter({
+  handlers: routeHandlers,
+  confidenceThreshold: 0.6,
+});
+
+const result = await router.route("I was charged twice for my subscription");
+console.log(`Intent: ${result.intent} (${(result.confidence * 100).toFixed(0)}% confidence)`);
+console.log(`Model used: ${result.model}`);
+console.log(`Response: ${result.response}`);
+console.log(`Routing: ${result.routingLatencyMs}ms, Response: ${result.responseLatencyMs}ms`);
+```
+
+### Fallback Strategies
+
+What happens when the router is not confident? There are several strategies:
+
+```typescript
+type FallbackStrategy = "ask-clarify" | "general-handler" | "multi-route" | "escalate";
+
+async function handleLowConfidence(
+  userMessage: string,
+  intent: Intent,
+  confidence: number,
+  strategy: FallbackStrategy
+): Promise<string> {
+  switch (strategy) {
+    case "ask-clarify": {
+      // Ask the user to clarify
+      const response = await client.messages.create({
+        model: "claude-haiku-3-5",
+        max_tokens: 150,
+        messages: [
+          {
+            role: "user",
+            content: `The user said: "${userMessage}"
+
+I'm not sure if this is about billing, technical support, or account management.
+Generate a brief, friendly question asking them to clarify what they need help with.`,
+          },
+        ],
+      });
+      return response.content[0].type === "text" ? response.content[0].text : "";
+    }
+
+    case "general-handler":
+      // Route to the general handler
+      return "Routing to general handler...";
+
+    case "multi-route": {
+      // Try multiple handlers and pick the best response
+      // (expensive but thorough for important cases)
+      const handlers = [routeHandlers.billing, routeHandlers.technical];
+      const responses = await Promise.all(
+        handlers.map(async (handler) => {
+          const resp = await client.messages.create({
+            model: handler.model,
+            max_tokens: handler.maxTokens,
+            system: handler.systemPrompt,
+            messages: [{ role: "user", content: userMessage }],
+          });
+          return resp.content[0].type === "text" ? resp.content[0].text : "";
+        })
+      );
+      // In practice, you'd have the model pick the best response
+      return responses[0];
+    }
+
+    case "escalate":
+      return "I'd like to connect you with a human agent who can help with your specific question. Please hold on.";
+  }
+}
+```
+
+### Routing with Conversation Context
+
+In multi-turn conversations, the intent can shift. Handle this by reclassifying periodically:
+
+```typescript
+class ConversationalRouter {
+  private router: PromptRouter;
+  private currentIntent: Intent = "unknown";
+  private turnsSinceReclassify: number = 0;
+  private reclassifyEveryN: number = 3;
+
+  constructor(router: PromptRouter) {
+    this.router = router;
+  }
+
+  async handleMessage(
+    userMessage: string,
+    conversationHistory: Array<{ role: "user" | "assistant"; content: string }>
+  ): Promise<RoutingResult> {
+    this.turnsSinceReclassify++;
+
+    // Reclassify intent periodically or on first message
+    if (
+      this.currentIntent === "unknown" ||
+      this.turnsSinceReclassify >= this.reclassifyEveryN
+    ) {
+      const result = await this.router.route(userMessage);
+      this.currentIntent = result.intent;
+      this.turnsSinceReclassify = 0;
+      return result;
+    }
+
+    // Otherwise, continue with current intent handler
+    return this.router.route(userMessage);
+  }
+}
+```
+
+## Common Mistakes
+
+1. **Using an expensive model for routing**: The classification step should be as fast and cheap as possible. Use the smallest model that achieves good accuracy. Haiku-class models typically handle intent classification well.
+
+2. **Too many intent categories**: With 20+ categories, the router becomes unreliable. Group related intents into 4-7 categories for the top-level router, and use sub-routing within categories if needed.
+
+3. **No fallback handling**: If the router does not recognize the intent, the user gets nothing. Always have a fallback path -- either a general handler or a clarification question.
+
+4. **Static routing without adaptation**: If the user says "I have a billing question about a technical error," the intent is ambiguous. Consider multi-label classification or sub-routing.
+
+5. **Not measuring routing accuracy separately**: Track how often the router classifies correctly. If routing accuracy is low, the whole system suffers regardless of how good the specialized prompts are.
+
+## Your Task
+
+Build a complete prompt routing system that:
+
+1. Implements an intent classifier using a cheap model
+2. Defines at least 4 specialized route handlers with distinct system prompts
+3. Routes user messages to the appropriate handler based on classified intent
+4. Includes a confidence threshold with fallback to a general handler
+5. Logs routing decisions (intent, confidence, model used, latency)
+6. Tests with at least 10 diverse user messages, including ambiguous ones
+
+Build the router for one of these scenarios:
+- **Customer support bot**: billing, technical, account, general
+- **Developer assistant**: code help, debugging, architecture, documentation
+- **E-commerce assistant**: product search, order status, returns, recommendations
+
+Print a report showing: each test input, classified intent, confidence, and the first 100 characters of the response.
+
+Bonus: Implement sub-routing where one category (e.g., "technical") has its own internal router that dispatches to even more specific handlers.

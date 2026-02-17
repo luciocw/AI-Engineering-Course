@@ -1,0 +1,200 @@
+---
+title: "Writing Effective Tool Descriptions"
+description: "Learn how to write tool and parameter descriptions that guide the LLM to choose the right tool with the right arguments."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 6
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["tools", "function-calling", "descriptions", "prompt-engineering", "best-practices"]
+---
+
+## What You'll Learn
+
+- Why tool descriptions are your most important lever for tool use quality
+- When to be verbose vs. concise in descriptions
+- How to write parameter descriptions that reduce errors
+- Using examples within descriptions to guide the LLM
+
+## Key Concepts
+
+### Why Descriptions Matter
+
+The LLM reads your tool descriptions to decide:
+1. **Whether** to use a tool at all
+2. **Which** tool to pick when multiple could work
+3. **What arguments** to pass
+
+A poorly described tool is like a poorly labeled button -- the user (in this case, the LLM) will click the wrong one.
+
+### Anatomy of a Good Tool Description
+
+```typescript
+// BAD: Too vague
+{
+  name: "search",
+  description: "Searches stuff",
+}
+
+// BETTER: What it searches, when to use it
+{
+  name: "search_knowledge_base",
+  description: "Search the internal knowledge base for company documentation, " +
+    "policies, and procedures. Use this when the user asks about company-specific " +
+    "information that wouldn't be in general knowledge. Returns matched documents " +
+    "with titles and snippets.",
+}
+
+// BEST: Adds when NOT to use it
+{
+  name: "search_knowledge_base",
+  description: "Search the internal knowledge base for company documentation, " +
+    "policies, and procedures. Use this when the user asks about company-specific " +
+    "information that wouldn't be in general knowledge. Returns matched documents " +
+    "with titles and snippets. Do NOT use for general knowledge questions -- " +
+    "only for company-internal information.",
+}
+```
+
+### The Description Checklist
+
+Every tool description should answer these questions:
+
+| Question | Example |
+|----------|---------|
+| **What does it do?** | "Fetches the current stock price" |
+| **When should it be used?** | "Use when the user asks about stock prices or market data" |
+| **What does it return?** | "Returns price in USD, change %, and volume" |
+| **When should it NOT be used?** | "Do not use for cryptocurrency -- use `get_crypto_price` instead" |
+
+### Parameter Descriptions
+
+Each parameter description should explain the format and give examples:
+
+```typescript
+{
+  name: "search_orders",
+  description: "Search customer orders by various criteria.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      // BAD: No description
+      customer_id: { type: "string" },
+
+      // BETTER: Explains format
+      customer_id: {
+        type: "string",
+        description: "The customer's unique ID in UUID format, e.g. '550e8400-e29b-41d4-a716-446655440000'",
+      },
+
+      // BAD: Ambiguous
+      date: { type: "string" },
+
+      // BETTER: Specifies format and default behavior
+      start_date: {
+        type: "string",
+        description: "Start date for the search range in ISO 8601 format (YYYY-MM-DD). " +
+          "If omitted, defaults to 30 days ago.",
+      },
+
+      // BAD: Enum with no context
+      status: {
+        type: "string",
+        enum: ["P", "S", "D", "C"],
+      },
+
+      // BETTER: Explains each option
+      status: {
+        type: "string",
+        enum: ["pending", "shipped", "delivered", "cancelled"],
+        description: "Filter by order status. 'pending' = not yet shipped, " +
+          "'shipped' = in transit, 'delivered' = received by customer, " +
+          "'cancelled' = order was cancelled.",
+      },
+    },
+    required: ["customer_id"],
+  },
+}
+```
+
+### Verbose vs. Concise
+
+**Be verbose when:**
+- Tools have overlapping purposes (help the LLM distinguish)
+- Parameters have specific formats (dates, IDs, codes)
+- The tool has side effects (sends email, creates records)
+- The domain is specialized (medical, legal, financial terms)
+
+**Be concise when:**
+- The tool name is self-explanatory (`get_current_time`)
+- Parameters are obvious (`query` for a search tool)
+- There is only one tool (no need to distinguish)
+
+### Examples in Descriptions
+
+Including examples in descriptions dramatically improves argument quality:
+
+```typescript
+{
+  name: "query_database",
+  description:
+    "Execute a read-only SQL query against the analytics database. " +
+    "The database contains tables: users, orders, products, reviews. " +
+    "Example queries:\n" +
+    "- 'SELECT COUNT(*) FROM orders WHERE created_at > \\'2024-01-01\\''\n" +
+    "- 'SELECT p.name, AVG(r.rating) FROM products p JOIN reviews r ON p.id = r.product_id GROUP BY p.name'\n" +
+    "Only SELECT queries are allowed. No INSERT, UPDATE, or DELETE.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      sql: {
+        type: "string",
+        description: "A valid SELECT SQL query. Use single quotes for string " +
+          "literals. Tables available: users (id, name, email, created_at), " +
+          "orders (id, user_id, total, status, created_at), " +
+          "products (id, name, price, category), " +
+          "reviews (id, product_id, user_id, rating, text).",
+      },
+    },
+    required: ["sql"],
+  },
+}
+```
+
+### Testing Your Descriptions
+
+A practical way to test descriptions is to try ambiguous prompts and see which tool gets selected:
+
+```typescript
+// If you have both search_web and search_knowledge_base,
+// test with prompts that could go either way:
+const testPrompts = [
+  "What's our company vacation policy?",     // Should use knowledge_base
+  "What are the best vacation spots?",        // Should use web
+  "How much PTO do I have?",                  // Should use knowledge_base
+  "What's the weather in Hawaii?",            // Should use web (or weather tool)
+];
+```
+
+## Common Mistakes
+
+1. **One-word descriptions** -- `description: "Search"` tells the LLM nothing. Always explain what, when, and what format.
+
+2. **Contradicting the schema** -- If your description says "pass a list of IDs" but the schema defines a single string, the LLM gets confused. Keep them consistent.
+
+3. **No negative guidance** -- Not saying when to avoid a tool leads to overuse. If you have `send_email`, specify "Only use when the user explicitly asks to send an email."
+
+4. **Jargon without explanation** -- If a parameter uses domain-specific codes or formats, explain them. Don't assume the LLM knows your internal conventions.
+
+5. **Forgetting the return value description** -- Telling the LLM what format the result comes back in helps it process and present the data to the user.
+
+## Your Task
+
+You have three poorly-described tools below. Rewrite their descriptions (tool-level and parameter-level) following the best practices from this lesson.
+
+**Tool 1:** `search` -- searches products in an e-commerce catalog
+**Tool 2:** `get_user` -- fetches user profile data from a CRM
+**Tool 3:** `create_ticket` -- creates a support ticket in a helpdesk system
+
+For each tool, write the full `Anthropic.Tool` definition with excellent descriptions. Then write three ambiguous test prompts and explain which tool should be selected for each.

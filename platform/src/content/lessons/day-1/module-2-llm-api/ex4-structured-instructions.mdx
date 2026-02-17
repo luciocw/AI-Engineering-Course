@@ -1,0 +1,323 @@
+---
+title: "Structured Instructions: XML Tags and Prompt Engineering"
+description: "Learn to use XML tags in prompts, structure formatting rules, specify constraints and output formats, and build well-engineered prompts."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 4
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["llm", "api", "prompt-engineering", "xml-tags", "structured-prompts", "output-format"]
+---
+
+## What You'll Learn
+
+- How to use XML tags to structure prompts clearly
+- Techniques for specifying rules, constraints, and output formats
+- The fundamentals of prompt engineering
+- How structured prompts improve consistency and reliability
+
+## Key Concepts
+
+### Why Structure Matters
+
+When you write a long paragraph of instructions to an LLM, important details get lost. The model might miss a constraint buried in the middle or misinterpret the relationship between instructions. XML tags solve this by creating clear, labeled sections.
+
+Compare these two approaches:
+
+```typescript
+// Unstructured - easy for the model to miss details
+const messyPrompt = `You are a product review analyzer. Take the review and determine the sentiment, extract key features mentioned, identify any complaints, and rate the overall satisfaction on a scale of 1-5. Make sure to handle cases where the review is sarcastic. Output as JSON.`;
+
+// Structured - each instruction is clearly delineated
+const structuredPrompt = `You are a product review analyzer.
+
+<task>
+Analyze the provided product review and extract structured information.
+</task>
+
+<input_format>
+A single product review in plain text.
+</input_format>
+
+<extraction_rules>
+- Determine overall sentiment: positive, negative, mixed, or neutral
+- Extract key features or aspects mentioned (e.g., "battery life", "build quality")
+- Identify specific complaints, if any
+- Rate overall satisfaction on a scale of 1-5
+- Handle sarcasm: if the tone is sarcastic, classify based on actual intent, not surface words
+</extraction_rules>
+
+<output_format>
+Respond with a JSON object:
+{
+  "sentiment": "positive" | "negative" | "mixed" | "neutral",
+  "features_mentioned": string[],
+  "complaints": string[],
+  "satisfaction_rating": number,
+  "sarcasm_detected": boolean
+}
+</output_format>`;
+```
+
+The structured version is longer, but the model follows it more reliably because each instruction has a clear label and scope.
+
+### XML Tags in Prompts
+
+XML tags act as section headers that both you and the model can parse. They are not actually parsed as XML -- they are just a convention that LLMs have been trained to recognize and respect.
+
+Here are the most useful tag patterns:
+
+```typescript
+// Wrapping input data
+const promptWithData = `<instructions>
+Summarize the following article in 3 bullet points.
+Focus on actionable takeaways for software developers.
+</instructions>
+
+<article>
+${articleText}
+</article>`;
+
+// Separating examples from instructions
+const promptWithExamples = `<instructions>
+Classify the given text into one of these categories: bug-report, feature-request, question.
+</instructions>
+
+<examples>
+<example>
+<input>The app crashes when I click the save button</input>
+<output>bug-report</output>
+</example>
+<example>
+<input>It would be great if you could add dark mode</input>
+<output>feature-request</output>
+</example>
+</examples>
+
+<input>
+${userText}
+</input>`;
+```
+
+### Building Blocks of Structured Prompts
+
+A well-engineered prompt typically has these components:
+
+```typescript
+function buildStructuredPrompt(config: {
+  context: string;
+  task: string;
+  rules: string[];
+  inputData: string;
+  outputFormat: string;
+  examples?: Array<{ input: string; output: string }>;
+}): string {
+  let prompt = "";
+
+  prompt += `<context>\n${config.context}\n</context>\n\n`;
+  prompt += `<task>\n${config.task}\n</task>\n\n`;
+
+  prompt += `<rules>\n`;
+  config.rules.forEach((rule, i) => {
+    prompt += `${i + 1}. ${rule}\n`;
+  });
+  prompt += `</rules>\n\n`;
+
+  if (config.examples && config.examples.length > 0) {
+    prompt += `<examples>\n`;
+    config.examples.forEach((ex) => {
+      prompt += `<example>\n<input>${ex.input}</input>\n<output>${ex.output}</output>\n</example>\n`;
+    });
+    prompt += `</examples>\n\n`;
+  }
+
+  prompt += `<output_format>\n${config.outputFormat}\n</output_format>\n\n`;
+  prompt += `<input>\n${config.inputData}\n</input>`;
+
+  return prompt;
+}
+```
+
+### Specifying Rules and Constraints
+
+Rules tell the model what to do (and not do). Be explicit and specific:
+
+```typescript
+const systemPrompt = `You are a content moderation assistant.
+
+<rules>
+1. Classify content into: safe, warning, or blocked
+2. NEVER reproduce or quote harmful content in your response
+3. If content is in a language you cannot analyze, respond with: {"classification": "unknown", "reason": "unsupported language"}
+4. Borderline cases should be classified as "warning", not "safe"
+5. Provide a confidence score between 0.0 and 1.0
+6. Your response must be valid JSON - no additional text before or after
+</rules>
+
+<output_format>
+{
+  "classification": "safe" | "warning" | "blocked",
+  "reason": "brief explanation",
+  "confidence": number
+}
+</output_format>`;
+```
+
+Notice how each rule is numbered and unambiguous. Avoid vague instructions like "be careful" -- instead, specify exactly what "careful" means in context.
+
+### Output Format Specification
+
+Getting consistent output formats is one of the biggest challenges with LLMs. XML tags help enormously:
+
+```typescript
+// Specify format with an exact example
+const formatPrompt = `<task>
+Extract contact information from the provided text.
+</task>
+
+<output_format>
+Return a JSON object with this exact structure:
+{
+  "name": "string or null if not found",
+  "email": "string or null if not found",
+  "phone": "string or null if not found",
+  "company": "string or null if not found"
+}
+
+Important:
+- Return ONLY the JSON object, no other text
+- Use null for missing fields, not empty strings
+- Phone numbers should be in the format they appear in the text
+</output_format>
+
+<input>
+${inputText}
+</input>`;
+```
+
+### Combining System Prompt with Structured User Messages
+
+The system prompt defines behavior, while structured user messages define specific tasks:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+const system = `You are a code analysis assistant.
+
+<capabilities>
+- Identify code smells and anti-patterns
+- Suggest refactoring approaches
+- Estimate complexity (simple, moderate, complex)
+</capabilities>
+
+<response_rules>
+- Always respond with valid JSON
+- Include actionable suggestions, not just observations
+- Rate severity of issues: low, medium, high
+</response_rules>`;
+
+async function analyzeCode(code: string, language: string) {
+  const userMessage = `<code language="${language}">
+${code}
+</code>
+
+<output_format>
+{
+  "issues": [
+    {
+      "type": "string",
+      "severity": "low" | "medium" | "high",
+      "line": number,
+      "description": "string",
+      "suggestion": "string"
+    }
+  ],
+  "overall_complexity": "simple" | "moderate" | "complex",
+  "summary": "string"
+}
+</output_format>`;
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    system,
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+  return JSON.parse(text);
+}
+```
+
+### Prompt Engineering Principles
+
+Here are the core principles that make prompts reliable:
+
+**1. Be Specific Over General**
+```typescript
+// Bad: "Write good code"
+// Good: "Write TypeScript with strict types, no 'any', and JSDoc comments on public functions"
+```
+
+**2. Show, Do Not Just Tell**
+```typescript
+// Bad: "Format the output nicely"
+// Good:
+const format = `<output_format>
+## Analysis
+[2-3 sentence summary]
+
+### Key Findings
+- Finding 1
+- Finding 2
+
+### Recommendation
+[1 sentence recommendation]
+</output_format>`;
+```
+
+**3. Handle Edge Cases Explicitly**
+```typescript
+const rules = `<rules>
+- If the input is empty, respond with: {"error": "empty_input"}
+- If the input contains multiple items, process only the first one
+- If you cannot determine the answer, respond with: {"result": null, "reason": "explanation"}
+</rules>`;
+```
+
+**4. Order Instructions by Priority**
+Place the most important instructions first. LLMs pay more attention to the beginning and end of prompts than the middle.
+
+## Common Mistakes
+
+1. **Inconsistent tag naming**: Pick a convention and stick with it. Using `<input>`, `<user_input>`, and `<data>` interchangeably creates confusion. Be consistent.
+
+2. **Over-nesting tags**: `<section><subsection><detail><item>` is too deep. Keep nesting to 2 levels maximum for best results.
+
+3. **Forgetting to close tags**: Always close your tags. An unclosed `<rules>` tag can cause the model to treat everything after it as rules.
+
+4. **Mixing instructions and data**: Keep your instructions in one section and the data to process in another. When instructions are mixed into the data, the model may ignore them.
+
+5. **Not specifying what to do with missing data**: If you ask the model to extract 5 fields but only 3 are present in the input, what should it do? Specify this explicitly (use null, use "N/A", skip the field, etc.).
+
+## Your Task
+
+Build a structured prompt system for a **product review analyzer** that:
+
+1. Uses XML tags to clearly separate instructions, rules, examples, and input
+2. Extracts: sentiment, product aspects mentioned, pros, cons, and a 1-5 star rating
+3. Handles edge cases: empty reviews, non-English text, sarcastic reviews
+4. Returns valid JSON with a consistent structure
+5. Includes at least 2 few-shot examples within the prompt
+
+Test your analyzer with:
+- A clearly positive review
+- A clearly negative review
+- A mixed/sarcastic review
+- An empty string
+
+Verify that all four produce valid JSON with the correct structure.

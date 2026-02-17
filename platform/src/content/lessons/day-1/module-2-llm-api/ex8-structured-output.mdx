@@ -1,0 +1,377 @@
+---
+title: "Structured Output: Getting JSON from LLMs"
+description: "Learn how to reliably get JSON output from LLMs, implement retry patterns, parse and validate responses, and use Zod for schema validation."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 8
+difficulty: "intermediate"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "json", "structured-output", "zod", "validation", "parsing", "retry-pattern"]
+---
+
+## What You'll Learn
+
+- How to reliably get JSON output from LLMs
+- The retry-with-reminder pattern for handling malformed output
+- How to parse and validate LLM responses
+- Using Zod for runtime schema validation
+- Building robust output pipelines
+
+## Key Concepts
+
+### The Structured Output Challenge
+
+LLMs generate text. Your application needs data. Bridging that gap reliably is one of the most important skills in AI engineering. When you ask an LLM for JSON, several things can go wrong:
+
+- The model adds explanatory text before or after the JSON
+- The model wraps JSON in a markdown code block
+- The model produces invalid JSON (trailing commas, single quotes)
+- The model uses a different structure than what you expected
+
+```typescript
+// What you want:
+// {"sentiment": "positive", "confidence": 0.95}
+
+// What you might get:
+// Here's the analysis:
+// ```json
+// {"sentiment": "positive", "confidence": 0.95}
+// ```
+// The sentiment is clearly positive because...
+```
+
+### Getting Clean JSON Output
+
+The first step is a well-structured prompt that minimizes formatting issues:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+async function getJsonResponse(prompt: string): Promise<unknown> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    temperature: 0, // Low temperature for consistent structured output
+    system: `You are a data extraction assistant.
+Always respond with valid JSON only.
+Never include explanatory text, markdown formatting, or code fences.
+Just the raw JSON object.`,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+  return JSON.parse(text);
+}
+```
+
+### Robust JSON Extraction
+
+Even with good prompts, you need a parser that handles common formatting issues:
+
+```typescript
+function extractJson(text: string): unknown {
+  // Strategy 1: Try direct parse
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Continue to fallback strategies
+  }
+
+  // Strategy 2: Extract from markdown code blocks
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    try {
+      return JSON.parse(codeBlockMatch[1].trim());
+    } catch {
+      // Continue
+    }
+  }
+
+  // Strategy 3: Find the first { or [ and match to the last } or ]
+  const jsonMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[1]);
+    } catch {
+      // Continue
+    }
+  }
+
+  throw new Error(`Could not extract valid JSON from response: ${text.slice(0, 200)}`);
+}
+```
+
+### The Retry-With-Reminder Pattern
+
+When JSON parsing fails, retry with a reminder that includes the malformed output:
+
+```typescript
+async function getJsonWithRetry<T>(
+  prompt: string,
+  systemPrompt: string,
+  maxRetries: number = 2
+): Promise<T> {
+  let lastError: Error | null = null;
+  let lastResponse: string = "";
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+    if (attempt === 0) {
+      // First attempt: just the prompt
+      messages.push({ role: "user", content: prompt });
+    } else {
+      // Retry: include the failed response and ask for correction
+      messages.push({ role: "user", content: prompt });
+      messages.push({ role: "assistant", content: lastResponse });
+      messages.push({
+        role: "user",
+        content: `Your previous response was not valid JSON. Error: ${lastError?.message}
+
+Please try again. Respond with ONLY a valid JSON object, no other text.`,
+      });
+    }
+
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      temperature: 0,
+      system: systemPrompt,
+      messages,
+    });
+
+    lastResponse =
+      response.content[0].type === "text" ? response.content[0].text : "";
+
+    try {
+      const parsed = extractJson(lastResponse);
+      return parsed as T;
+    } catch (error) {
+      lastError = error as Error;
+      console.log(
+        `Attempt ${attempt + 1} failed: ${lastError.message}. ${
+          attempt < maxRetries ? "Retrying..." : "No more retries."
+        }`
+      );
+    }
+  }
+
+  throw new Error(
+    `Failed to get valid JSON after ${maxRetries + 1} attempts: ${lastError?.message}`
+  );
+}
+```
+
+### Schema Validation with Zod
+
+JSON parsing tells you the syntax is valid. Schema validation tells you the *structure* is correct. Zod is the standard library for this in TypeScript:
+
+```bash
+npm install zod
+```
+
+```typescript
+import { z } from "zod";
+
+// Define the expected schema
+const SentimentSchema = z.object({
+  sentiment: z.enum(["positive", "negative", "neutral", "mixed"]),
+  confidence: z.number().min(0).max(1),
+  keywords: z.array(z.string()),
+  summary: z.string().max(200),
+});
+
+// TypeScript type is derived from the schema
+type SentimentResult = z.infer<typeof SentimentSchema>;
+
+// Validate LLM output against the schema
+function validateOutput<T>(data: unknown, schema: z.ZodType<T>): T {
+  const result = schema.safeParse(data);
+
+  if (!result.success) {
+    const errors = result.error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ");
+    throw new Error(`Schema validation failed: ${errors}`);
+  }
+
+  return result.data;
+}
+```
+
+### Complete Structured Output Pipeline
+
+Here is the full pipeline combining everything:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+
+const client = new Anthropic();
+
+// Step 1: Define your schema
+const ProductReviewSchema = z.object({
+  sentiment: z.enum(["positive", "negative", "neutral", "mixed"]),
+  rating: z.number().int().min(1).max(5),
+  pros: z.array(z.string()),
+  cons: z.array(z.string()),
+  summary: z.string(),
+});
+
+type ProductReview = z.infer<typeof ProductReviewSchema>;
+
+// Step 2: Build the prompt with schema description
+function buildExtractionPrompt(reviewText: string): string {
+  return `Analyze this product review and extract structured data.
+
+<review>
+${reviewText}
+</review>
+
+<output_schema>
+{
+  "sentiment": "positive" | "negative" | "neutral" | "mixed",
+  "rating": number (1-5),
+  "pros": string[] (list of positive points),
+  "cons": string[] (list of negative points),
+  "summary": string (one-sentence summary)
+}
+</output_schema>
+
+Respond with only the JSON object.`;
+}
+
+// Step 3: The complete extraction function
+async function analyzeReview(reviewText: string): Promise<ProductReview> {
+  const prompt = buildExtractionPrompt(reviewText);
+
+  const rawJson = await getJsonWithRetry<unknown>(
+    prompt,
+    "You are a data extraction assistant. Always respond with valid JSON only.",
+    2
+  );
+
+  // Validate against schema
+  return validateOutput(rawJson, ProductReviewSchema);
+}
+
+// Step 4: Use it
+async function main() {
+  try {
+    const review = await analyzeReview(
+      "Great headphones! The sound quality is amazing and battery lasts forever. A bit heavy though, and the case feels cheap. Overall very satisfied for the price."
+    );
+
+    console.log("Sentiment:", review.sentiment);
+    console.log("Rating:", review.rating);
+    console.log("Pros:", review.pros);
+    console.log("Cons:", review.cons);
+    console.log("Summary:", review.summary);
+  } catch (error) {
+    console.error("Failed to analyze review:", error);
+  }
+}
+```
+
+### Including Schema in Error Feedback
+
+When validation fails, tell the model exactly what went wrong:
+
+```typescript
+async function getValidatedJson<T>(
+  prompt: string,
+  schema: z.ZodType<T>,
+  maxRetries: number = 2
+): Promise<T> {
+  let messages: Array<{ role: "user" | "assistant"; content: string }> = [
+    { role: "user", content: prompt },
+  ];
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      temperature: 0,
+      system: "Respond with valid JSON only. No other text.",
+      messages,
+    });
+
+    const text =
+      response.content[0].type === "text" ? response.content[0].text : "";
+
+    try {
+      const parsed = extractJson(text);
+      return validateOutput(parsed, schema);
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+
+      // Add the failed attempt and correction request
+      messages.push({ role: "assistant", content: text });
+      messages.push({
+        role: "user",
+        content: `That response had an issue: ${(error as Error).message}
+
+Please fix the JSON and try again. Respond with only the corrected JSON object.`,
+      });
+    }
+  }
+
+  throw new Error("Unreachable");
+}
+```
+
+### Prefill Technique for JSON
+
+You can use the assistant prefill technique to force JSON output:
+
+```typescript
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  temperature: 0,
+  messages: [
+    {
+      role: "user",
+      content: `Extract the name and age from: "John is 30 years old"
+Return as JSON with "name" and "age" fields.`,
+    },
+    {
+      role: "assistant",
+      content: "{", // Prefill forces the model to continue the JSON
+    },
+  ],
+});
+
+// Reconstruct the full JSON
+const fullJson = "{" + response.content[0].text;
+const parsed = JSON.parse(fullJson);
+```
+
+## Common Mistakes
+
+1. **Trusting LLM output without validation**: Never use `JSON.parse()` on raw LLM output without a try/catch. And never trust the structure without schema validation. LLMs can produce syntactically valid JSON that has the wrong shape.
+
+2. **Not including the schema in the prompt**: The model cannot match a schema it has not seen. Always describe the expected output format explicitly in your prompt.
+
+3. **Giving up after one failed parse**: The retry-with-reminder pattern is remarkably effective. Most parse failures are fixed on the first retry because the model sees its mistake and corrects it.
+
+4. **Using high temperature for structured output**: Temperature adds randomness, which is the opposite of what you want for reliable JSON. Use temperature 0 for structured output tasks.
+
+5. **Not handling the markdown code block case**: Many LLMs will wrap JSON in triple backticks even when told not to. Your parser should handle this gracefully rather than failing.
+
+## Your Task
+
+Build a complete structured output pipeline that:
+
+1. Defines a Zod schema for a "meeting summary" with fields: `title`, `date`, `attendees` (array), `actionItems` (array of objects with `task`, `assignee`, `deadline`), and `decisions` (array of strings)
+2. Creates a prompt that asks the model to extract this structured data from meeting notes
+3. Implements the `extractJson` function with multiple parsing strategies
+4. Implements the retry-with-reminder pattern (max 2 retries)
+5. Validates the parsed JSON against your Zod schema
+6. Tests with both clean meeting notes and messy, informal meeting notes
+
+Bonus: Add a `confidence` field to each extracted item and have the model indicate how confident it is about each piece of information.

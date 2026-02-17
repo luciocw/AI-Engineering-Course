@@ -1,0 +1,255 @@
+---
+title: "Block Helpers"
+description: "Creating block helpers with options.fn() and options.inverse(), and building custom control-flow blocks."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 14
+difficulty: "advanced"
+estimatedMinutes: 20
+isFree: true
+tags: ["handlebars", "templates", "block-helpers", "options-fn", "options-inverse", "control-flow"]
+---
+
+## What You'll Learn
+
+You will learn how to create block helpers that wrap template content, understand `options.fn()` and `options.inverse()`, and build custom blocks like `{{#authorize}}`, `{{#repeat}}`, and `{{#filterBy}}`.
+
+## Key Concepts
+
+### What Are Block Helpers?
+
+So far, your helpers have been "inline" -- they take arguments and return a single value. Block helpers are different: they wrap a section of template content and control whether (and how) that content is rendered.
+
+You already know built-in block helpers: `{{#if}}`, `{{#each}}`, and `{{#unless}}`. Custom block helpers follow the same `{{#name}}...{{/name}}` pattern:
+
+```typescript
+import Handlebars from "handlebars";
+
+Handlebars.registerHelper("loud", function (options: Handlebars.HelperOptions) {
+  // options.fn(this) renders the block content with the current context
+  const content = options.fn(this);
+  return content.toUpperCase();
+});
+
+const template = Handlebars.compile(`
+{{#loud}}
+  Hello, {{name}}! Welcome to the platform.
+{{/loud}}
+`);
+
+const result = template({ name: "Alice" });
+// "HELLO, ALICE! WELCOME TO THE PLATFORM."
+```
+
+The helper calls `options.fn(this)` to render the block's inner content, then transforms the result before returning it.
+
+### The `options` Object for Block Helpers
+
+Block helpers receive an `options` object with these key methods:
+
+- **`options.fn(context)`** -- Renders the block content (everything between `{{#helper}}` and `{{/helper}}`). You pass a context object that the block content can use.
+- **`options.inverse(context)`** -- Renders the `{{else}}` block content. If there is no `{{else}}`, this renders nothing.
+- **`options.hash`** -- Hash arguments, same as inline helpers.
+
+```typescript
+Handlebars.registerHelper(
+  "authorize",
+  function (this: any, role: string, options: Handlebars.HelperOptions) {
+    if (this.userRole === role) {
+      return options.fn(this);
+    } else {
+      return options.inverse(this);
+    }
+  }
+);
+
+const template = Handlebars.compile(`
+{{#authorize "admin"}}
+  Welcome, admin! Here are the system controls.
+{{else}}
+  You do not have admin access.
+{{/authorize}}
+`);
+
+console.log(template({ userRole: "admin" }));
+// "Welcome, admin! Here are the system controls."
+
+console.log(template({ userRole: "viewer" }));
+// "You do not have admin access."
+```
+
+The `options.fn(this)` call renders the main block; `options.inverse(this)` renders the `{{else}}` block. This is exactly how the built-in `{{#if}}` works internally.
+
+### Building a `{{#repeat}}` Block
+
+A repeat helper renders its content multiple times:
+
+```typescript
+Handlebars.registerHelper(
+  "repeat",
+  function (count: number, options: Handlebars.HelperOptions) {
+    let result = "";
+    for (let i = 0; i < count; i++) {
+      // Pass extra data to the block using a modified context
+      result += options.fn({ ...this, index: i, isFirst: i === 0, isLast: i === count - 1 });
+    }
+    return result;
+  }
+);
+
+const template = Handlebars.compile(`
+{{#repeat 3}}
+Attempt {{index}}: Processing {{taskName}}...
+{{/repeat}}
+`);
+
+const result = template({ taskName: "data import" });
+// "Attempt 0: Processing data import..."
+// "Attempt 1: Processing data import..."
+// "Attempt 2: Processing data import..."
+```
+
+Notice how the helper passes `{ ...this, index: i }` to `options.fn()`. The spread operator (`...this`) preserves the original context, and `index: i` adds a new variable. Inside the block, both `{{taskName}}` (from the original context) and `{{index}}` (added by the helper) are available.
+
+### Building a `{{#filterBy}}` Block
+
+A filterBy helper renders its block only for items that match a condition:
+
+```typescript
+Handlebars.registerHelper(
+  "filterBy",
+  function (
+    this: any,
+    array: any[],
+    property: string,
+    value: any,
+    options: Handlebars.HelperOptions
+  ) {
+    if (!Array.isArray(array)) return options.inverse(this);
+
+    const filtered = array.filter((item) => item[property] === value);
+
+    if (filtered.length === 0) return options.inverse(this);
+
+    let result = "";
+    for (const item of filtered) {
+      result += options.fn(item);
+    }
+    return result;
+  }
+);
+
+const template = Handlebars.compile(`
+Active Users:
+{{#filterBy users "status" "active"}}
+- {{name}} ({{email}})
+{{else}}
+No active users found.
+{{/filterBy}}
+`);
+
+const result = template({
+  users: [
+    { name: "Alice", email: "alice@example.com", status: "active" },
+    { name: "Bob", email: "bob@example.com", status: "inactive" },
+    { name: "Carol", email: "carol@example.com", status: "active" },
+  ],
+});
+// "Active Users:"
+// "- Alice (alice@example.com)"
+// "- Carol (carol@example.com)"
+```
+
+This helper filters an array and renders the block once for each matching item. The `{{else}}` block handles the case where no items match.
+
+### Changing Context in Block Helpers
+
+A powerful feature of block helpers is the ability to change what `this` means inside the block. You control this by passing a different object to `options.fn()`:
+
+```typescript
+Handlebars.registerHelper(
+  "withDefaults",
+  function (this: any, options: Handlebars.HelperOptions) {
+    const defaults = {
+      model: "gpt-4",
+      temperature: 0.7,
+      maxTokens: 2048,
+    };
+
+    // Merge defaults with the current context
+    const contextWithDefaults = { ...defaults, ...this };
+    return options.fn(contextWithDefaults);
+  }
+);
+
+const template = Handlebars.compile(`
+{{#withDefaults}}
+Model: {{model}}
+Temperature: {{temperature}}
+Max Tokens: {{maxTokens}}
+{{/withDefaults}}
+`);
+
+// Only providing temperature; model and maxTokens come from defaults
+const result = template({ temperature: 0.2 });
+// "Model: gpt-4"
+// "Temperature: 0.2"
+// "Max Tokens: 2048"
+```
+
+### Block Helpers in AI Engineering
+
+Block helpers are perfect for creating reusable prompt sections:
+
+```typescript
+Handlebars.registerHelper(
+  "systemPrompt",
+  function (this: any, options: Handlebars.HelperOptions) {
+    const content = options.fn(this);
+    return `<system>\n${content.trim()}\n</system>`;
+  }
+);
+
+Handlebars.registerHelper(
+  "userMessage",
+  function (this: any, options: Handlebars.HelperOptions) {
+    const content = options.fn(this);
+    return `<user>\n${content.trim()}\n</user>`;
+  }
+);
+
+const template = Handlebars.compile(`
+{{#systemPrompt}}
+You are a {{role}} assistant. Be concise and accurate.
+{{/systemPrompt}}
+
+{{#userMessage}}
+{{question}}
+{{/userMessage}}
+`);
+
+const prompt = template({
+  role: "technical writing",
+  question: "How do I write a good API reference?",
+});
+// "<system>"
+// "You are a technical writing assistant. Be concise and accurate."
+// "</system>"
+// ""
+// "<user>"
+// "How do I write a good API reference?"
+// "</user>"
+```
+
+These block helpers add consistent XML-style wrapping that many AI models expect, while keeping the template content clean and readable.
+
+## Common Mistakes
+
+- **Forgetting to call `options.fn(this)`.** If your block helper does not call `options.fn()`, the block content is never rendered. The helper must explicitly render and return the content.
+- **Not passing context to `options.fn()`.** Calling `options.fn()` without an argument makes the block content have no context. Always pass `this` (or a custom context object) as the argument.
+- **Forgetting to handle the `{{else}}` case.** If your block helper can have a falsy path, call `options.inverse(this)` to render the `{{else}}` block. If you skip this, the `{{else}}` content is silently ignored.
+- **Returning `undefined` instead of a string.** Block helpers must return a string. If you forget the `return` statement, the block produces `undefined` in the output.
+
+## Your Task
+
+Create a custom block helper that wraps content with a conditional check. Implement both the `options.fn()` (true case) and `options.inverse()` (false/else case) paths. Then create a second block helper that iterates and renders its block content multiple times with a custom context.

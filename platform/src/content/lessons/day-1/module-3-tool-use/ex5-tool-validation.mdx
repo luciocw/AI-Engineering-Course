@@ -1,0 +1,236 @@
+---
+title: "Validating Tool Inputs with Zod"
+description: "Use Zod schemas to validate tool inputs at runtime, catch malformed data early, and design schemas that serve double duty as documentation and validation."
+day: "day-1"
+module: "module-3-tool-use"
+exercise: 5
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["tools", "function-calling", "zod", "validation", "schema-first", "runtime-types"]
+---
+
+## What You'll Learn
+
+- Why runtime validation matters even when the LLM "should" follow your schema
+- How to define Zod schemas for tool inputs
+- Producing helpful error messages that the LLM can use to self-correct
+- Schema-first design: deriving both JSON Schema and TypeScript types from Zod
+
+## Key Concepts
+
+### Why Validate?
+
+The LLM usually follows your JSON Schema, but not always. It might:
+
+- Send a string where you expected a number (`"42"` instead of `42`)
+- Omit a required field
+- Add unexpected fields
+- Send values outside your enum or range
+
+Without validation, these errors surface deep in your handler code as confusing runtime errors. With Zod, you catch them immediately and can tell the LLM exactly what went wrong.
+
+### Basic Zod Validation
+
+```typescript
+import { z } from "zod";
+
+// Define the schema
+const GetWeatherInput = z.object({
+  city: z.string().min(1, "City name cannot be empty"),
+  units: z.enum(["celsius", "fahrenheit"]).default("celsius"),
+});
+
+// TypeScript type derived from the schema (free!)
+type GetWeatherInput = z.infer<typeof GetWeatherInput>;
+
+// Validate incoming data
+function handleGetWeather(rawInput: unknown): string {
+  const parsed = GetWeatherInput.safeParse(rawInput);
+
+  if (!parsed.success) {
+    // Return a clear error the LLM can understand
+    return JSON.stringify({
+      error: "Invalid input",
+      details: parsed.error.issues.map((i) => ({
+        field: i.path.join("."),
+        message: i.message,
+      })),
+    });
+  }
+
+  // parsed.data is fully typed as GetWeatherInput
+  const { city, units } = parsed.data;
+  return JSON.stringify({ city, temp: 22, units });
+}
+```
+
+### Zod Schema Examples for Common Tool Patterns
+
+```typescript
+// String with constraints
+const SearchInput = z.object({
+  query: z.string().min(1).max(200),
+  limit: z.number().int().min(1).max(50).default(10),
+  category: z.enum(["all", "docs", "code", "issues"]).optional(),
+});
+
+// Nested objects
+const CreateEventInput = z.object({
+  title: z.string().min(1),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD format"),
+  location: z
+    .object({
+      name: z.string(),
+      address: z.string().optional(),
+    })
+    .optional(),
+  attendees: z.array(z.string().email()).min(1),
+});
+
+// Union types
+const FilterInput = z.object({
+  field: z.string(),
+  operator: z.enum(["eq", "gt", "lt", "contains"]),
+  value: z.union([z.string(), z.number(), z.boolean()]),
+});
+```
+
+### Returning Errors the LLM Can Fix
+
+When validation fails, format the error so Claude can understand what went wrong and retry:
+
+```typescript
+function validateAndExecute(
+  schema: z.ZodSchema,
+  rawInput: unknown,
+  handler: (input: any) => string
+): string {
+  const parsed = schema.safeParse(rawInput);
+
+  if (!parsed.success) {
+    const errors = parsed.error.issues.map((issue) => {
+      return `- ${issue.path.join(".")}: ${issue.message}`;
+    });
+
+    return JSON.stringify({
+      error: "Validation failed. Please fix the following and try again:",
+      issues: errors,
+    });
+  }
+
+  return handler(parsed.data);
+}
+```
+
+When Claude receives an error like this, it will often correct its input and try again automatically within the tool use loop.
+
+### Schema-First Design: From Zod to JSON Schema
+
+You can use `zod-to-json-schema` to generate your API tool definitions directly from Zod schemas. This means a single source of truth:
+
+```typescript
+import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import Anthropic from "@anthropic-ai/sdk";
+
+// 1. Define with Zod (single source of truth)
+const WeatherInputSchema = z.object({
+  city: z.string().describe("City name, e.g. 'Paris'"),
+  units: z
+    .enum(["celsius", "fahrenheit"])
+    .default("celsius")
+    .describe("Temperature units"),
+});
+
+// 2. Derive TypeScript type
+type WeatherInput = z.infer<typeof WeatherInputSchema>;
+
+// 3. Derive JSON Schema for the API
+const weatherTool: Anthropic.Tool = {
+  name: "get_weather",
+  description: "Get current weather for a city.",
+  input_schema: zodToJsonSchema(WeatherInputSchema) as Anthropic.Tool["input_schema"],
+};
+
+// 4. Validate at runtime using the same schema
+function handleWeather(rawInput: unknown): string {
+  const parsed = WeatherInputSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return JSON.stringify({ error: parsed.error.flatten() });
+  }
+  const { city, units } = parsed.data;
+  return JSON.stringify({ city, temp: 22, units });
+}
+```
+
+### Validated Tool Registry
+
+Combining the registry pattern from Exercise 4 with Zod validation:
+
+```typescript
+interface ValidatedTool<T extends z.ZodSchema> {
+  name: string;
+  description: string;
+  schema: T;
+  handler: (input: z.infer<T>) => string | Promise<string>;
+}
+
+function createTool<T extends z.ZodObject<any>>(
+  tool: ValidatedTool<T>
+): { definition: Anthropic.Tool; execute: (input: unknown) => string | Promise<string> } {
+  return {
+    definition: {
+      name: tool.name,
+      description: tool.description,
+      input_schema: zodToJsonSchema(tool.schema) as Anthropic.Tool["input_schema"],
+    },
+    execute: (rawInput: unknown) => {
+      const parsed = tool.schema.safeParse(rawInput);
+      if (!parsed.success) {
+        return JSON.stringify({
+          error: "Invalid input",
+          details: parsed.error.flatten().fieldErrors,
+        });
+      }
+      return tool.handler(parsed.data);
+    },
+  };
+}
+
+// Usage
+const weatherTool = createTool({
+  name: "get_weather",
+  description: "Get weather for a city",
+  schema: z.object({
+    city: z.string().describe("City name"),
+  }),
+  handler: ({ city }) => {
+    // city is typed as string here
+    return JSON.stringify({ city, temp: 20 });
+  },
+});
+```
+
+## Common Mistakes
+
+1. **Using `.parse()` instead of `.safeParse()`** -- `.parse()` throws on failure, which can crash your tool handler. Always use `.safeParse()` and handle the error branch.
+
+2. **Not returning validation errors to the LLM** -- If you just log the error and return a generic message, Claude cannot self-correct. Return the specific field errors.
+
+3. **Forgetting `.describe()` on Zod fields** -- When using `zod-to-json-schema`, the `.describe()` calls become the `description` fields in your JSON Schema. Without them, the LLM gets no guidance on parameters.
+
+4. **Over-validating** -- If the LLM sends `"42"` and you need a number, consider using `z.coerce.number()` instead of rejecting the input. Be strict on structure but flexible on coercion.
+
+5. **Not installing `zod-to-json-schema`** -- This is a separate package. Install it with `npm install zod-to-json-schema`.
+
+## Your Task
+
+Create a validated tool called `create_task` using the schema-first approach. The tool should accept:
+
+- `title` (required string, 1-100 chars)
+- `priority` (enum: "low", "medium", "high")
+- `due_date` (optional string in YYYY-MM-DD format)
+- `tags` (optional array of strings, max 5 items)
+
+Use Zod to define the schema, derive the JSON Schema for the API, and write a handler that validates input with `safeParse`. Return helpful error messages when validation fails. Test with both valid and invalid inputs.

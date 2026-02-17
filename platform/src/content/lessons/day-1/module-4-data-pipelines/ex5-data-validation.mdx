@@ -1,0 +1,226 @@
+---
+title: "Data Validation"
+description: "Learn to validate data with Zod schemas, detect XSS attacks in user data, handle validation errors, and adopt a schema-first approach to data processing."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 5
+difficulty: "intermediate"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "validation", "zod", "xss", "security", "schema"]
+---
+
+## What You'll Learn
+
+You will learn how to use Zod to validate data at runtime, detect potentially malicious content like XSS in incoming data, handle validation errors gracefully, and adopt a schema-first approach where you define what valid data looks like before writing any processing logic.
+
+## Key Concepts
+
+### Why Validate Data?
+
+TypeScript types only exist at compile time. Once your code runs, there is no type checker watching over your data. If a CSV file has a missing column, or an API returns unexpected values, TypeScript cannot help you. Runtime validation catches these problems before they cause bugs downstream.
+
+In AI Engineering, bad data is dangerous. Imagine sending unvalidated user input to an LLM -- it could contain prompt injections, malicious scripts, or simply garbage that wastes API credits. Validation is your first line of defense.
+
+### What Is Zod?
+
+Zod is a TypeScript-first schema validation library. You define a schema (a description of valid data), and Zod checks your data against it at runtime. The killer feature: Zod automatically infers TypeScript types from your schemas, so you define the shape once and get both validation and types.
+
+```typescript
+import { z } from "zod";
+
+// Define a schema
+const UserSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  age: z.number().int().min(0).max(150),
+});
+
+// Infer the TypeScript type from the schema
+type User = z.infer<typeof UserSchema>;
+// { name: string; email: string; age: number }
+
+// Validate data
+const result = UserSchema.safeParse({
+  name: "Alice",
+  email: "alice@example.com",
+  age: 30,
+});
+
+if (result.success) {
+  console.log(result.data); // Typed as User
+} else {
+  console.log(result.error.issues); // Array of validation errors
+}
+```
+
+### parse vs safeParse
+
+Zod gives you two ways to validate:
+
+```typescript
+// parse: throws an error on invalid data
+try {
+  const user = UserSchema.parse(unknownData);
+  // user is typed as User
+} catch (err) {
+  if (err instanceof z.ZodError) {
+    console.error(err.issues);
+  }
+}
+
+// safeParse: returns a result object, never throws
+const result = UserSchema.safeParse(unknownData);
+if (result.success) {
+  const user = result.data; // typed as User
+} else {
+  const errors = result.error.issues; // detailed error info
+}
+```
+
+For data pipelines, **always use `safeParse`**. You do not want your entire pipeline to crash because one record out of 10,000 has a typo. `safeParse` lets you handle bad records gracefully.
+
+### Schema-First Data Processing
+
+Define your schema before writing any processing logic. This forces you to think about what valid data looks like:
+
+```typescript
+const SalesRecordSchema = z.object({
+  product: z.string().min(1, "Product name is required"),
+  quantity: z.number().int().positive("Quantity must be positive"),
+  price: z.number().positive("Price must be positive"),
+  region: z.enum(["North", "South", "East", "West"]),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD"),
+});
+
+type SalesRecord = z.infer<typeof SalesRecordSchema>;
+```
+
+Now your schema documents exactly what your pipeline expects. Anyone reading the code knows instantly what valid data looks like.
+
+### Validating an Array of Records
+
+When processing CSV or JSON data, you validate each record individually so one bad record does not invalidate the entire dataset:
+
+```typescript
+interface ValidationResult<T> {
+  valid: T[];
+  invalid: Array<{
+    record: unknown;
+    errors: z.ZodIssue[];
+  }>;
+}
+
+function validateRecords<T>(
+  records: unknown[],
+  schema: z.ZodSchema<T>
+): ValidationResult<T> {
+  const valid: T[] = [];
+  const invalid: Array<{ record: unknown; errors: z.ZodIssue[] }> = [];
+
+  for (const record of records) {
+    const result = schema.safeParse(record);
+    if (result.success) {
+      valid.push(result.data);
+    } else {
+      invalid.push({ record, errors: result.error.issues });
+    }
+  }
+
+  return { valid, invalid };
+}
+
+// Usage
+const { valid, invalid } = validateRecords(parsedCSVData, SalesRecordSchema);
+console.log(`${valid.length} valid, ${invalid.length} invalid records`);
+```
+
+### XSS Detection in Data
+
+Cross-Site Scripting (XSS) attacks hide malicious scripts inside data that looks normal. If your pipeline processes user-generated content and later renders it in a web page or sends it to an LLM, you need to detect and reject these:
+
+```typescript
+// Simple XSS pattern detection
+const XSS_PATTERNS = [
+  /<script\b/i,
+  /javascript:/i,
+  /on\w+\s*=/i,       // onclick=, onerror=, etc.
+  /<iframe\b/i,
+  /<object\b/i,
+  /<embed\b/i,
+];
+
+function containsXSS(value: string): boolean {
+  return XSS_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+// Use it in a Zod schema with .refine()
+const SafeStringSchema = z
+  .string()
+  .refine((val) => !containsXSS(val), {
+    message: "String contains potentially malicious content",
+  });
+
+const CommentSchema = z.object({
+  author: SafeStringSchema,
+  body: SafeStringSchema,
+  rating: z.number().int().min(1).max(5),
+});
+```
+
+### Handling Validation Errors
+
+Good error handling tells you exactly what went wrong and where:
+
+```typescript
+function formatValidationErrors(error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const path = issue.path.join(".");
+    return `Field "${path}": ${issue.message}`;
+  });
+}
+
+// Example output:
+// [
+//   'Field "quantity": Quantity must be positive',
+//   'Field "region": Expected North | South | East | West, received "Central"',
+// ]
+```
+
+For pipelines, log the errors and continue processing valid records:
+
+```typescript
+const { valid, invalid } = validateRecords(records, SalesRecordSchema);
+
+if (invalid.length > 0) {
+  console.warn(`Skipping ${invalid.length} invalid records:`);
+  for (const { record, errors } of invalid) {
+    console.warn(`  Record:`, record);
+    console.warn(`  Errors:`, errors.map((e) => e.message).join("; "));
+  }
+}
+
+// Continue processing only valid records
+processValidRecords(valid);
+```
+
+### Why This Matters for AI Engineering
+
+Validation is critical for AI pipelines because:
+
+1. **Cost control**: Invalid data sent to an LLM wastes API credits
+2. **Security**: Unvalidated user content could contain prompt injections
+3. **Reliability**: A single malformed record should not crash your entire pipeline
+4. **Debugging**: When an LLM gives a bad response, validation helps you rule out bad input
+
+## Common Mistakes
+
+- **Using `parse` instead of `safeParse` in pipelines.** A thrown error stops your entire pipeline. Use `safeParse` and handle errors per-record.
+- **Validating only at the boundary.** Validate when data enters your system (from file, API, user input), not deep inside your processing logic.
+- **Ignoring the error details.** Zod provides detailed error information including the path to the invalid field. Log it -- you will need it when debugging.
+- **Over-validating.** Do not add validation rules for things that do not matter. If a field can be any string, use `z.string()` without further constraints.
+- **Not validating data from "trusted" sources.** Files get corrupted. APIs change their response format. Always validate, even if you trust the source.
+
+## Your Task
+
+Define a Zod schema for a customer record that includes name (non-empty string), email (valid email), age (positive integer), and a comment field that rejects XSS patterns. Validate an array of records and return separate arrays of valid and invalid entries, including error details for each invalid record.

@@ -1,0 +1,265 @@
+---
+title: "Data Enrichment"
+description: "Learn to compute derived fields, join data sources, perform lookups, and build enrichment pipelines that add value to raw data."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 8
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "enrichment", "joins", "lookups", "derived-fields"]
+---
+
+## What You'll Learn
+
+You will learn how to add value to your data by computing new fields, joining records across multiple data sources, performing efficient lookups, and building composable enrichment pipelines. Enrichment turns raw records into the rich, contextualized data that makes AI applications powerful.
+
+## Key Concepts
+
+### What Is Data Enrichment?
+
+Enrichment is the process of adding new information to existing records. You start with a basic record and make it richer:
+
+- A customer record gets enriched with their purchase history
+- A product gets enriched with its category hierarchy and pricing tier
+- A support ticket gets enriched with the customer's account status
+
+In AI Engineering, enrichment is how you build context. The more relevant context you provide to an LLM, the better its responses.
+
+### Computing Derived Fields
+
+The simplest form of enrichment is calculating new fields from existing ones:
+
+```typescript
+interface Order {
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+  orderDate: string;
+}
+
+interface EnrichedOrder extends Order {
+  totalPrice: number;
+  priceCategory: "budget" | "standard" | "premium";
+  dayOfWeek: string;
+  isWeekend: boolean;
+}
+
+function enrichOrder(order: Order): EnrichedOrder {
+  const total = order.quantity * order.unitPrice;
+  const date = new Date(order.orderDate);
+  const dayOfWeek = date.toLocaleDateString("en-US", { weekday: "long" });
+
+  return {
+    ...order,
+    totalPrice: total,
+    priceCategory:
+      total < 50 ? "budget" : total < 200 ? "standard" : "premium",
+    dayOfWeek,
+    isWeekend: date.getDay() === 0 || date.getDay() === 6,
+  };
+}
+```
+
+Derived fields should be deterministic -- given the same input, they always produce the same output. This makes them easy to test and debug.
+
+### Joining Data Sources
+
+A join combines records from two datasets based on a shared key. This is analogous to SQL JOINs but done in TypeScript:
+
+```typescript
+interface Customer {
+  customerId: string;
+  name: string;
+  email: string;
+}
+
+interface Purchase {
+  customerId: string;
+  product: string;
+  amount: number;
+}
+
+interface CustomerWithPurchases {
+  customerId: string;
+  name: string;
+  email: string;
+  purchases: Purchase[];
+  totalSpent: number;
+}
+
+function joinCustomersWithPurchases(
+  customers: Customer[],
+  purchases: Purchase[]
+): CustomerWithPurchases[] {
+  // Build a lookup map for efficient joining
+  const purchasesByCustomer = new Map<string, Purchase[]>();
+
+  for (const purchase of purchases) {
+    const existing = purchasesByCustomer.get(purchase.customerId) ?? [];
+    existing.push(purchase);
+    purchasesByCustomer.set(purchase.customerId, existing);
+  }
+
+  // Join each customer with their purchases
+  return customers.map((customer) => {
+    const customerPurchases =
+      purchasesByCustomer.get(customer.customerId) ?? [];
+    return {
+      ...customer,
+      purchases: customerPurchases,
+      totalSpent: customerPurchases.reduce((sum, p) => sum + p.amount, 0),
+    };
+  });
+}
+```
+
+The key optimization here is building a `Map` first. Without it, you would need a nested loop (O(n*m) complexity). With a Map, the join is O(n+m).
+
+### Lookup Tables
+
+Lookups are a lightweight form of joining -- mapping a code or ID to its full representation:
+
+```typescript
+// Category lookup table
+const CATEGORY_LOOKUP: Record<string, string> = {
+  ELC: "Electronics",
+  CLO: "Clothing",
+  FOD: "Food & Beverage",
+  HOM: "Home & Garden",
+};
+
+// Region metadata
+const REGION_INFO: Record<string, { timezone: string; currency: string }> = {
+  US_WEST: { timezone: "America/Los_Angeles", currency: "USD" },
+  US_EAST: { timezone: "America/New_York", currency: "USD" },
+  EU_WEST: { timezone: "Europe/London", currency: "EUR" },
+};
+
+function enrichWithLookups(record: {
+  categoryCode: string;
+  regionCode: string;
+}) {
+  return {
+    ...record,
+    categoryName: CATEGORY_LOOKUP[record.categoryCode] ?? "Unknown",
+    regionInfo: REGION_INFO[record.regionCode] ?? {
+      timezone: "UTC",
+      currency: "USD",
+    },
+  };
+}
+```
+
+Lookup tables are fast (O(1) per lookup) and easy to maintain. Store them as constants or load them from a configuration file.
+
+### Building Enrichment Pipelines
+
+An enrichment pipeline is a series of enrichment steps applied in sequence. Each step adds information without removing any:
+
+```typescript
+// Each enricher takes a record and returns an enriched version
+type Enricher<TInput, TOutput> = (record: TInput) => TOutput;
+
+// Compose enrichment steps
+function enrichPipeline<T>(
+  records: T[],
+  enrichers: Array<(record: any) => any>
+): any[] {
+  return records.map((record) =>
+    enrichers.reduce(
+      (enriched, enricher) => enricher(enriched),
+      record
+    )
+  );
+}
+
+// Define individual enrichment steps
+function addPricingTier(record: { totalPrice: number }) {
+  return {
+    ...record,
+    tier: record.totalPrice > 1000 ? "enterprise" : "standard",
+  };
+}
+
+function addTimestamp(record: any) {
+  return {
+    ...record,
+    enrichedAt: new Date().toISOString(),
+  };
+}
+
+function addFullCategory(
+  record: { categoryCode: string },
+  lookup: Record<string, string>
+) {
+  return {
+    ...record,
+    categoryName: lookup[record.categoryCode] ?? "Unknown",
+  };
+}
+
+// Run the pipeline
+const enriched = enrichPipeline(orders, [
+  enrichOrder,
+  addPricingTier,
+  addTimestamp,
+  (r) => addFullCategory(r, CATEGORY_LOOKUP),
+]);
+```
+
+A cleaner, more type-safe approach uses a pipeline class:
+
+```typescript
+class EnrichmentPipeline<T> {
+  private steps: Array<{ name: string; fn: (record: any) => any }> = [];
+
+  addStep(name: string, fn: (record: any) => any): this {
+    this.steps.push({ name, fn });
+    return this;
+  }
+
+  run(records: T[]): { enriched: any[]; stepTimings: Record<string, number> } {
+    const stepTimings: Record<string, number> = {};
+
+    let current: any[] = records;
+    for (const step of this.steps) {
+      const start = Date.now();
+      current = current.map(step.fn);
+      stepTimings[step.name] = Date.now() - start;
+    }
+
+    return { enriched: current, stepTimings };
+  }
+}
+
+// Usage
+const pipeline = new EnrichmentPipeline<Order>()
+  .addStep("computeTotals", enrichOrder)
+  .addStep("addTier", addPricingTier)
+  .addStep("addTimestamp", addTimestamp);
+
+const { enriched, stepTimings } = pipeline.run(orders);
+console.log("Step timings:", stepTimings);
+```
+
+### Why This Matters for AI Engineering
+
+Enrichment is the bridge between raw data and useful AI context. When you send data to an LLM:
+
+- **Raw**: `{ customerId: "C-123", product: "Widget", amount: 50 }`
+- **Enriched**: `{ customerId: "C-123", customerName: "Alice Johnson", product: "Widget", category: "Electronics", amount: 50, tier: "standard", isRepeatCustomer: true, lifetimeValue: 2340 }`
+
+The enriched version gives the LLM far more context to work with. It can now say "Alice is a loyal customer who typically buys electronics" instead of just "Customer C-123 bought a Widget."
+
+## Common Mistakes
+
+- **Enriching inside a loop without indexing.** If you look up related data with a `find()` call inside a `map()`, you get O(n*m) performance. Build a Map first.
+- **Not handling missing lookups.** Always provide a fallback when a lookup key is not found. Use `?? "Unknown"` or a sensible default.
+- **Mutating the input record.** Always spread the original record into a new object. Never modify `record.newField = value` directly.
+- **Making enrichment steps order-dependent without documenting it.** If step B requires a field that step A adds, document this dependency clearly.
+- **Over-enriching.** Adding 50 fields to every record wastes memory and makes the data hard to work with. Only compute fields you actually need.
+
+## Your Task
+
+Build an enrichment pipeline that takes an array of order records, joins them with customer data and product data using lookup maps, computes derived fields (total price, pricing tier), and returns the fully enriched records along with timing information for each enrichment step.

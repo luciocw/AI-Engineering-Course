@@ -1,0 +1,165 @@
+---
+title: "CSV Basics"
+description: "Learn what CSV files are, how to parse them with csv-parse/sync, and how to add TypeScript types to your parsed data."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 1
+difficulty: "beginner"
+estimatedMinutes: 10
+isFree: true
+tags: ["data", "pipelines", "csv", "parsing", "typescript", "readFileSync"]
+---
+
+## What You'll Learn
+
+You will learn what CSV (Comma-Separated Values) files are, how to read them from disk using Node.js, how to parse them into JavaScript objects using `csv-parse/sync`, and how to add TypeScript types so your data is safe to work with.
+
+## Key Concepts
+
+### What Is CSV?
+
+CSV stands for Comma-Separated Values. It is one of the simplest and most universal data formats. Every spreadsheet app, database, and analytics tool can export CSV. When you download data from a government portal, a SaaS dashboard, or an API export, there is a good chance it arrives as CSV.
+
+A CSV file is plain text. The first line is usually the header (column names), and every subsequent line is a row of data:
+
+```text
+name,age,city
+Alice,30,Portland
+Bob,25,Seattle
+Charlie,35,Denver
+```
+
+That is it. No special encoding, no nested structures. Just rows and columns separated by commas.
+
+### Why CSV Matters for AI Engineering
+
+In AI Engineering, your data pipeline often starts with CSV. You might need to:
+
+- Parse a CSV of customer support tickets before sending them to an LLM for classification
+- Load product data from a CSV to build a search index
+- Read training data exported from a labeling tool
+
+CSV is the "universal adapter" of data. Learning to parse it reliably is the first step in any data pipeline.
+
+### Reading a File from Disk
+
+Node.js provides `fs.readFileSync` to read a file into memory as a string. This is the synchronous version, which blocks until the file is fully read. For small-to-medium files (under a few hundred MB), this is perfectly fine.
+
+```typescript
+import { readFileSync } from "fs";
+
+const raw = readFileSync("data/customers.csv", "utf-8");
+console.log(raw);
+// "name,age,city\nAlice,30,Portland\nBob,25,Seattle\n..."
+```
+
+The second argument `"utf-8"` tells Node.js to return a string instead of a raw binary Buffer. You will almost always want this for text files.
+
+### Parsing CSV with csv-parse/sync
+
+You could split the string by newlines and commas yourself, but that breaks on edge cases like quoted fields (`"Smith, Jr."`) or escaped characters. The `csv-parse` library handles all of this correctly.
+
+The `/sync` version parses everything in one call and returns an array:
+
+```typescript
+import { parse } from "csv-parse/sync";
+import { readFileSync } from "fs";
+
+const raw = readFileSync("data/customers.csv", "utf-8");
+
+const records = parse(raw, {
+  columns: true,       // Use the first row as column names
+  skip_empty_lines: true,  // Ignore blank lines
+});
+
+console.log(records);
+// [
+//   { name: "Alice", age: "30", city: "Portland" },
+//   { name: "Bob", age: "25", city: "Seattle" },
+//   { name: "Charlie", age: "35", city: "Denver" }
+// ]
+```
+
+The `columns: true` option is critical. Without it, you get arrays of strings instead of objects. With it, each row becomes an object where the keys are the header names.
+
+### Adding TypeScript Types
+
+Notice that `age` is `"30"` (a string), not `30` (a number). CSV has no type information -- everything is a string. TypeScript helps you define the shape of your data so you can catch mistakes early:
+
+```typescript
+interface Customer {
+  name: string;
+  age: string;   // Still a string from CSV!
+  city: string;
+}
+
+const records: Customer[] = parse(raw, {
+  columns: true,
+  skip_empty_lines: true,
+});
+
+// Now TypeScript knows what fields exist
+records.forEach((customer) => {
+  console.log(customer.name);  // Autocomplete works
+  console.log(customer.naem);  // TypeScript error! Typo caught.
+});
+```
+
+If you need `age` as a number, you convert it explicitly after parsing:
+
+```typescript
+interface CustomerParsed {
+  name: string;
+  age: number;
+  city: string;
+}
+
+const customers: CustomerParsed[] = records.map((r) => ({
+  name: r.name,
+  age: parseInt(r.age, 10),
+  city: r.city,
+}));
+```
+
+This explicit conversion step is a good habit. It forces you to think about data types rather than hoping they are correct.
+
+### Putting It All Together
+
+Here is the complete pattern you will use throughout this module:
+
+```typescript
+import { parse } from "csv-parse/sync";
+import { readFileSync } from "fs";
+
+interface SalesRecord {
+  product: string;
+  quantity: string;
+  price: string;
+  date: string;
+}
+
+// Step 1: Read the file
+const raw = readFileSync("data/sales.csv", "utf-8");
+
+// Step 2: Parse into typed objects
+const records: SalesRecord[] = parse(raw, {
+  columns: true,
+  skip_empty_lines: true,
+});
+
+// Step 3: Work with your data
+console.log(`Loaded ${records.length} sales records`);
+console.log(`First record:`, records[0]);
+```
+
+## Common Mistakes
+
+- **Forgetting `"utf-8"` in readFileSync.** Without it, you get a Buffer object instead of a string, and `parse()` may behave unexpectedly.
+- **Assuming CSV values are numbers.** Every value from CSV parsing is a string. If you need numbers, you must convert them explicitly with `parseInt()` or `parseFloat()`.
+- **Not using `columns: true`.** Without this option, you get arrays like `["Alice", "30", "Portland"]` instead of objects. Objects are almost always easier to work with.
+- **Hardcoding file paths.** Use path parameters or constants so your code works in different environments. Relative paths resolve from the current working directory, which may not be what you expect.
+- **Ignoring empty lines.** Real-world CSV files often have trailing newlines or blank rows. Always use `skip_empty_lines: true`.
+
+## Your Task
+
+Read a CSV file containing sales data, parse it using `csv-parse/sync` with proper TypeScript types, and return the parsed array. Make sure your type interface matches the CSV columns exactly.

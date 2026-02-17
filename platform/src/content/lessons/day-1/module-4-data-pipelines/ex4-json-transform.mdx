@@ -1,0 +1,254 @@
+---
+title: "JSON Transform"
+description: "Learn to normalize JSON from different sources, merge datasets, align schemas, and perform deep object transformations."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 4
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "json", "transform", "normalize", "merge", "schema"]
+---
+
+## What You'll Learn
+
+You will learn how to handle JSON data from different sources that use different shapes and naming conventions, merge multiple datasets into one, align schemas so everything has the same structure, and transform deeply nested objects. These skills are essential when your AI application consumes data from multiple APIs.
+
+## Key Concepts
+
+### The Problem: Inconsistent Data Sources
+
+In the real world, you rarely get data from a single source in a single format. Suppose you are building an AI assistant that analyzes product data. One API returns:
+
+```json
+{ "productName": "Widget", "cost": 25.00, "qty": 100 }
+```
+
+Another API returns:
+
+```json
+{ "name": "Gadget", "price": 50.00, "quantity": 5, "metadata": { "sku": "G-100" } }
+```
+
+Same concept (products), completely different shapes. Your pipeline needs to normalize these into a single, consistent structure before processing.
+
+### Normalizing JSON
+
+Normalization means converting different shapes into one canonical shape. Define your target interface first, then write a mapper for each source:
+
+```typescript
+// Your canonical shape
+interface Product {
+  name: string;
+  price: number;
+  quantity: number;
+  sku: string | null;
+}
+
+// Source A: different field names
+interface SourceAProduct {
+  productName: string;
+  cost: number;
+  qty: number;
+}
+
+function normalizeSourceA(item: SourceAProduct): Product {
+  return {
+    name: item.productName,
+    price: item.cost,
+    quantity: item.qty,
+    sku: null,  // Source A does not have SKU
+  };
+}
+
+// Source B: nested structure
+interface SourceBProduct {
+  name: string;
+  price: number;
+  quantity: number;
+  metadata: { sku: string };
+}
+
+function normalizeSourceB(item: SourceBProduct): Product {
+  return {
+    name: item.name,
+    price: item.price,
+    quantity: item.quantity,
+    sku: item.metadata?.sku ?? null,
+  };
+}
+```
+
+The key principle: define the target shape once, then write one normalizer per source. Each normalizer is small, testable, and isolated.
+
+### Merging Datasets
+
+Once normalized, you can merge data from multiple sources:
+
+```typescript
+function mergeProducts(
+  sourceA: SourceAProduct[],
+  sourceB: SourceBProduct[]
+): Product[] {
+  const normalizedA = sourceA.map(normalizeSourceA);
+  const normalizedB = sourceB.map(normalizeSourceB);
+
+  return [...normalizedA, ...normalizedB];
+}
+```
+
+If you need to deduplicate (same product from both sources), merge by a shared key:
+
+```typescript
+function mergeAndDeduplicate(
+  sourceA: SourceAProduct[],
+  sourceB: SourceBProduct[]
+): Product[] {
+  const normalizedA = sourceA.map(normalizeSourceA);
+  const normalizedB = sourceB.map(normalizeSourceB);
+
+  const productMap = new Map<string, Product>();
+
+  // Source A first
+  for (const product of normalizedA) {
+    productMap.set(product.name.toLowerCase(), product);
+  }
+
+  // Source B overwrites if same name exists (B has more data)
+  for (const product of normalizedB) {
+    productMap.set(product.name.toLowerCase(), product);
+  }
+
+  return Array.from(productMap.values());
+}
+```
+
+### Schema Alignment
+
+Sometimes the data is not just named differently -- it has fundamentally different structures. Schema alignment handles structural differences:
+
+```typescript
+// Source C returns a flat object with prefixed fields
+interface SourceCRecord {
+  item_name: string;
+  item_price_usd: number;
+  item_stock_count: number;
+  item_category: string;
+  item_is_active: boolean;
+}
+
+// Strip the "item_" prefix and restructure
+function normalizeSourceC(item: SourceCRecord): Product & { category: string } {
+  return {
+    name: item.item_name,
+    price: item.item_price_usd,
+    quantity: item.item_stock_count,
+    sku: null,
+    category: item.item_category,
+  };
+}
+```
+
+### Deep Object Transformation
+
+Some APIs return deeply nested JSON. You need to flatten or reshape it:
+
+```typescript
+interface APIResponse {
+  data: {
+    results: Array<{
+      attributes: {
+        title: string;
+        pricing: {
+          base: number;
+          currency: string;
+        };
+      };
+      inventory: {
+        available: number;
+        warehouse: string;
+      };
+    }>;
+  };
+}
+
+function flattenAPIResponse(response: APIResponse): Product[] {
+  return response.data.results.map((result) => ({
+    name: result.attributes.title,
+    price: result.attributes.pricing.base,
+    quantity: result.inventory.available,
+    sku: null,
+  }));
+}
+```
+
+When traversing deep structures, always use optional chaining (`?.`) to handle missing fields gracefully:
+
+```typescript
+function safeExtract(result: any): Product {
+  return {
+    name: result?.attributes?.title ?? "Unknown",
+    price: result?.attributes?.pricing?.base ?? 0,
+    quantity: result?.inventory?.available ?? 0,
+    sku: result?.attributes?.sku ?? null,
+  };
+}
+```
+
+### Building a Transform Pipeline
+
+Combine these operations into a reusable transform function:
+
+```typescript
+interface TransformResult {
+  products: Product[];
+  sourceCount: {
+    sourceA: number;
+    sourceB: number;
+    sourceC: number;
+  };
+  totalProducts: number;
+}
+
+function transformAllSources(
+  aData: SourceAProduct[],
+  bData: SourceBProduct[],
+  cData: SourceCRecord[]
+): TransformResult {
+  const fromA = aData.map(normalizeSourceA);
+  const fromB = bData.map(normalizeSourceB);
+  const fromC = cData.map(normalizeSourceC);
+
+  const allProducts = [...fromA, ...fromB, ...fromC];
+
+  return {
+    products: allProducts,
+    sourceCount: {
+      sourceA: fromA.length,
+      sourceB: fromB.length,
+      sourceC: fromC.length,
+    },
+    totalProducts: allProducts.length,
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+LLMs work best with clean, consistent data. If you feed an LLM a mix of `productName`, `name`, and `item_name`, it wastes tokens figuring out the structure instead of analyzing the content. Normalizing your data before it reaches the LLM means:
+
+- Shorter prompts (less wasted tokens on explaining structure)
+- More consistent outputs (the LLM sees the same format every time)
+- Easier post-processing (you know exactly what shape the data is in)
+
+## Common Mistakes
+
+- **Not defining the target schema first.** Always design your canonical interface before writing normalizers. This prevents each normalizer from drifting into a slightly different shape.
+- **Forgetting null/undefined handling.** Real API data has missing fields. Use optional chaining (`?.`) and nullish coalescing (`??`) everywhere.
+- **Mutating source objects.** Never modify the original data. Always return new objects from your normalizers.
+- **Ignoring case differences.** When deduplicating by name, `"Widget"` and `"widget"` should usually match. Normalize the key (e.g., `.toLowerCase()`) before comparison.
+- **Not tracking data provenance.** When merging sources, consider adding a `source` field so you know where each record came from. This helps debugging.
+
+## Your Task
+
+Given two arrays of product data with different schemas, write normalizer functions for each source, merge the results into a single unified array, and handle cases where the same product appears in both sources. Return the merged, deduplicated array of products.

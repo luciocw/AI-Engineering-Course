@@ -1,0 +1,302 @@
+---
+title: "Error Pipeline"
+description: "Learn error handling strategies for data pipelines: retry with exponential backoff, fallback strategies, and dead-letter queues for failed records."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 13
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["data", "pipelines", "error-handling", "retry", "backoff", "fallback", "dead-letter-queue"]
+---
+
+## What You'll Learn
+
+You will learn how to build data pipelines that handle failures gracefully. You will implement retry logic with exponential backoff, design fallback strategies for when retries are exhausted, and create dead-letter queues to capture failed records for later analysis. These patterns are essential for any production pipeline.
+
+## Key Concepts
+
+### Why Error Handling Matters
+
+In a perfect world, every API call succeeds, every file parses correctly, and every record is valid. In reality:
+
+- APIs return 429 (rate limited) or 500 (server error) responses
+- Network connections time out
+- Data contains unexpected values that crash your transforms
+- External services go down for maintenance
+
+A pipeline without error handling stops at the first failure. A pipeline with good error handling processes everything it can, retries transient failures, and saves permanent failures for human review.
+
+### Types of Errors
+
+Not all errors are the same. Your handling strategy depends on the error type:
+
+```typescript
+// Transient: might succeed if you try again
+class TransientError extends Error {
+  constructor(message: string, public readonly retryable: boolean = true) {
+    super(message);
+    this.name = "TransientError";
+  }
+}
+
+// Permanent: will never succeed, no point retrying
+class PermanentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentError";
+  }
+}
+
+function classifyError(error: unknown): "transient" | "permanent" {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    // Rate limits and server errors are transient
+    if (message.includes("429") || message.includes("rate limit")) return "transient";
+    if (message.includes("500") || message.includes("502") || message.includes("503")) return "transient";
+    if (message.includes("timeout") || message.includes("econnreset")) return "transient";
+    // Validation errors and auth errors are permanent
+    if (message.includes("400") || message.includes("401") || message.includes("403")) return "permanent";
+    if (message.includes("validation")) return "permanent";
+  }
+  return "transient"; // Default: assume transient, retry
+}
+```
+
+### Retry with Exponential Backoff
+
+When a transient error occurs, wait and try again. Exponential backoff means each retry waits longer than the last, giving the failing service time to recover:
+
+```typescript
+interface RetryConfig {
+  maxRetries: number;
+  initialDelayMs: number;
+  maxDelayMs: number;
+  backoffMultiplier: number;
+}
+
+const DEFAULT_RETRY_CONFIG: RetryConfig = {
+  maxRetries: 3,
+  initialDelayMs: 1000,      // 1 second
+  maxDelayMs: 30000,          // 30 seconds max
+  backoffMultiplier: 2,       // Double the delay each retry
+};
+
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  config: RetryConfig = DEFAULT_RETRY_CONFIG
+): Promise<T> {
+  let lastError: Error | undefined;
+  let delay = config.initialDelayMs;
+
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      // Do not retry permanent errors
+      if (classifyError(error) === "permanent") {
+        throw lastError;
+      }
+
+      // Do not retry if we have exhausted all attempts
+      if (attempt === config.maxRetries) {
+        throw lastError;
+      }
+
+      // Wait before retrying
+      console.warn(
+        `Attempt ${attempt + 1} failed: ${lastError.message}. Retrying in ${delay}ms...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+
+      // Increase delay for next retry (with jitter)
+      const jitter = Math.random() * 0.3 * delay; // 0-30% jitter
+      delay = Math.min(delay * config.backoffMultiplier + jitter, config.maxDelayMs);
+    }
+  }
+
+  throw lastError;
+}
+```
+
+Jitter (random variation in delay) prevents the "thundering herd" problem where many clients retry at exactly the same time.
+
+### Fallback Strategies
+
+When retries are exhausted, you need a fallback. What happens to the record?
+
+```typescript
+type FallbackStrategy<T, R> =
+  | { type: "default"; value: R }           // Use a default value
+  | { type: "skip" }                          // Skip the record
+  | { type: "queue"; handler: (item: T, error: Error) => void }; // Send to dead letter queue
+
+async function processWithFallback<T, R>(
+  item: T,
+  processor: (item: T) => Promise<R>,
+  fallback: FallbackStrategy<T, R>,
+  retryConfig?: RetryConfig
+): Promise<{ result: R; status: "success" | "fallback" | "skipped" } | null> {
+  try {
+    const result = await withRetry(() => processor(item), retryConfig);
+    return { result, status: "success" };
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+
+    switch (fallback.type) {
+      case "default":
+        return { result: fallback.value, status: "fallback" };
+      case "skip":
+        return null;
+      case "queue":
+        fallback.handler(item, err);
+        return null;
+    }
+  }
+}
+```
+
+### Dead-Letter Queues
+
+A dead-letter queue (DLQ) stores failed records so they can be analyzed and reprocessed later:
+
+```typescript
+interface DeadLetterEntry<T> {
+  record: T;
+  error: string;
+  timestamp: string;
+  attempts: number;
+  lastAttempt: string;
+}
+
+class DeadLetterQueue<T> {
+  private entries: DeadLetterEntry<T>[] = [];
+
+  add(record: T, error: Error, attempts: number): void {
+    this.entries.push({
+      record,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+      attempts,
+      lastAttempt: new Date().toISOString(),
+    });
+  }
+
+  getAll(): DeadLetterEntry<T>[] {
+    return [...this.entries];
+  }
+
+  get size(): number {
+    return this.entries.length;
+  }
+
+  // Export for later analysis
+  toJSON(): string {
+    return JSON.stringify(this.entries, null, 2);
+  }
+
+  // Retrieve entries for reprocessing
+  drain(): DeadLetterEntry<T>[] {
+    const entries = [...this.entries];
+    this.entries = [];
+    return entries;
+  }
+}
+```
+
+### Complete Error-Handling Pipeline
+
+Putting it all together into a production-ready pipeline:
+
+```typescript
+interface PipelineResult<T, R> {
+  successful: Array<{ input: T; output: R }>;
+  failed: DeadLetterEntry<T>[];
+  stats: {
+    total: number;
+    succeeded: number;
+    retried: number;
+    failed: number;
+    totalRetries: number;
+  };
+}
+
+async function resilientPipeline<T, R>(
+  records: T[],
+  processor: (item: T) => Promise<R>,
+  config: {
+    retryConfig?: RetryConfig;
+    concurrency?: number;
+  } = {}
+): Promise<PipelineResult<T, R>> {
+  const dlq = new DeadLetterQueue<T>();
+  const successful: Array<{ input: T; output: R }> = [];
+  let retried = 0;
+  let totalRetries = 0;
+
+  for (const record of records) {
+    let attempts = 0;
+    let lastError: Error | undefined;
+    let delay = config.retryConfig?.initialDelayMs ?? 1000;
+    const maxRetries = config.retryConfig?.maxRetries ?? 3;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      attempts++;
+      try {
+        const result = await processor(record);
+        successful.push({ input: record, output: result });
+        if (attempt > 0) retried++;
+        totalRetries += attempt;
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        if (classifyError(error) === "permanent" || attempt === maxRetries) {
+          dlq.add(record, lastError, attempts);
+          totalRetries += attempt;
+          break;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, config.retryConfig?.maxDelayMs ?? 30000);
+      }
+    }
+  }
+
+  return {
+    successful,
+    failed: dlq.getAll(),
+    stats: {
+      total: records.length,
+      succeeded: successful.length,
+      retried,
+      failed: dlq.size,
+      totalRetries,
+    },
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+LLM API calls fail. Networks are unreliable. External services go down. In AI pipelines specifically:
+
+- **Rate limiting** is common with LLM APIs. Exponential backoff with jitter is the standard solution.
+- **Intermittent failures** happen when LLMs return malformed JSON or unexpected responses. A retry often succeeds.
+- **Cost awareness**: failed records that go to a dead-letter queue can be reprocessed later without re-processing the records that already succeeded.
+- **Observability**: knowing how many records failed and why is essential for maintaining a production AI pipeline.
+
+## Common Mistakes
+
+- **Retrying permanent errors.** A 400 Bad Request will never succeed. Classify errors before deciding whether to retry.
+- **Not using jitter.** Without jitter, retries from multiple pipeline instances happen simultaneously, making the problem worse.
+- **Setting max delay too low.** If a service is down for 5 minutes, your 10-second max delay will burn through all retries in under a minute. Use generous max delays.
+- **Losing failed records.** Without a dead-letter queue, failed records disappear. Always capture them for reprocessing.
+- **Not logging retry attempts.** When debugging, you need to know how many retries happened and when. Log every attempt.
+- **Retrying infinitely.** Always set a maximum number of retries. An infinite retry loop can run forever and waste resources.
+
+## Your Task
+
+Build an error-handling pipeline that processes an array of records, retries transient failures with exponential backoff and jitter, sends permanently failed records to a dead-letter queue, and returns comprehensive statistics including success count, failure count, retry count, and the dead-letter queue contents.

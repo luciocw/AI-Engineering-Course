@@ -1,0 +1,250 @@
+---
+title: "Data Cleaning"
+description: "Learn to normalize strings, deduplicate records, fix encoding issues, and apply data quality patterns for reliable AI pipelines."
+day: "day-1"
+module: "module-4-data-pipelines"
+exercise: 7
+difficulty: "intermediate"
+estimatedMinutes: 20
+isFree: true
+tags: ["data", "pipelines", "cleaning", "deduplication", "normalization", "encoding", "quality"]
+---
+
+## What You'll Learn
+
+You will learn practical data cleaning techniques: normalizing messy strings, removing duplicate records using multiple strategies, fixing common encoding problems, and applying data quality patterns. Clean data is a prerequisite for everything else in your pipeline -- especially when that data becomes context for an LLM.
+
+## Key Concepts
+
+### Why Data Cleaning Matters
+
+Real-world data is messy. Names are misspelled. Phone numbers come in five different formats. Someone entered "N/A" where a number should be. Encoding errors turn accented characters into garbage. If you feed this mess to an LLM, you get garbage out.
+
+Data cleaning is the unglamorous but essential step that makes everything downstream work. In production AI systems, teams often spend more time cleaning data than building the AI itself.
+
+### Normalizing Strings
+
+String normalization means applying consistent rules so equivalent values match:
+
+```typescript
+function normalizeString(value: string): string {
+  return value
+    .trim()                     // Remove leading/trailing whitespace
+    .replace(/\s+/g, " ")       // Collapse multiple spaces into one
+    .toLowerCase();              // Consistent casing
+}
+
+normalizeString("  Hello   World  "); // "hello world"
+normalizeString("HELLO world");       // "hello world"
+```
+
+For specific fields, you need targeted normalization:
+
+```typescript
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function normalizePhone(phone: string): string {
+  // Strip everything except digits
+  const digits = phone.replace(/\D/g, "");
+  // Ensure US numbers have country code
+  if (digits.length === 10) return `1${digits}`;
+  return digits;
+}
+
+function normalizeName(name: string): string {
+  return name
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+normalizePhone("(555) 123-4567");  // "15551234567"
+normalizePhone("555.123.4567");    // "15551234567"
+normalizeName("  john   DOE  ");   // "John Doe"
+```
+
+### Deduplication Strategies
+
+Duplicates creep in when data comes from multiple sources or users enter the same thing twice. There are several strategies to detect and remove them.
+
+**Strategy 1: Exact match on a key field**
+
+```typescript
+function deduplicateByKey<T>(
+  records: T[],
+  keyFn: (record: T) => string
+): T[] {
+  const seen = new Map<string, T>();
+
+  for (const record of records) {
+    const key = keyFn(record);
+    if (!seen.has(key)) {
+      seen.set(key, record);
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+// Deduplicate by email (first occurrence wins)
+const unique = deduplicateByKey(customers, (c) =>
+  normalizeEmail(c.email)
+);
+```
+
+**Strategy 2: Fuzzy matching for names**
+
+Sometimes duplicates are not exact. "Jon Smith" and "John Smith" might be the same person. A simple approach uses normalized comparison:
+
+```typescript
+function similarity(a: string, b: string): number {
+  const setA = new Set(a.toLowerCase().split(""));
+  const setB = new Set(b.toLowerCase().split(""));
+  const intersection = new Set([...setA].filter((x) => setB.has(x)));
+  const union = new Set([...setA, ...setB]);
+  return intersection.size / union.size; // Jaccard similarity
+}
+
+function deduplicateFuzzy<T>(
+  records: T[],
+  keyFn: (record: T) => string,
+  threshold: number = 0.8
+): T[] {
+  const result: T[] = [];
+
+  for (const record of records) {
+    const key = keyFn(record);
+    const isDuplicate = result.some(
+      (existing) => similarity(keyFn(existing), key) >= threshold
+    );
+    if (!isDuplicate) {
+      result.push(record);
+    }
+  }
+
+  return result;
+}
+```
+
+**Strategy 3: Composite keys**
+
+When no single field is unique, combine multiple fields:
+
+```typescript
+const unique = deduplicateByKey(records, (r) =>
+  `${normalizeName(r.name)}|${normalizeEmail(r.email)}|${r.zipCode}`
+);
+```
+
+### Fixing Encoding Issues
+
+Encoding problems happen when text is read with the wrong character set. Common symptoms: `Ã©` instead of `e`, `â€"` instead of an em-dash.
+
+```typescript
+function fixCommonEncodings(text: string): string {
+  const replacements: [string | RegExp, string][] = [
+    [/\u00e2\u0080\u0093/g, "\u2013"],   // en-dash
+    [/\u00e2\u0080\u0094/g, "\u2014"],   // em-dash
+    [/\u00e2\u0080\u0099/g, "\u2019"],   // right single quote
+    [/\u00e2\u0080\u009c/g, "\u201c"],   // left double quote
+    [/\u00e2\u0080\u009d/g, "\u201d"],   // right double quote
+    [/\u00c3\u00a9/g, "\u00e9"],          // e-acute
+    [/\u00c3\u00b1/g, "\u00f1"],          // n-tilde
+  ];
+
+  let result = text;
+  for (const [pattern, replacement] of replacements) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+// Also strip non-printable characters
+function stripNonPrintable(text: string): string {
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+```
+
+### Data Quality Patterns
+
+A data quality pipeline applies multiple cleaning steps in order:
+
+```typescript
+interface CleaningResult<T> {
+  cleaned: T[];
+  duplicatesRemoved: number;
+  recordsModified: number;
+  issues: string[];
+}
+
+function cleanCustomerData(raw: RawCustomer[]): CleaningResult<Customer> {
+  const issues: string[] = [];
+  let modified = 0;
+
+  // Step 1: Normalize all string fields
+  const normalized = raw.map((r) => {
+    const cleaned = {
+      name: normalizeName(r.name),
+      email: normalizeEmail(r.email),
+      phone: normalizePhone(r.phone),
+      city: r.city?.trim() ?? "",
+    };
+    if (JSON.stringify(cleaned) !== JSON.stringify(r)) {
+      modified++;
+    }
+    return cleaned;
+  });
+
+  // Step 2: Remove records with missing required fields
+  const complete = normalized.filter((r) => {
+    if (!r.name || !r.email) {
+      issues.push(`Removed record with missing name or email`);
+      return false;
+    }
+    return true;
+  });
+
+  // Step 3: Deduplicate
+  const beforeDedup = complete.length;
+  const deduped = deduplicateByKey(complete, (r) => r.email);
+  const duplicatesRemoved = beforeDedup - deduped.length;
+
+  if (duplicatesRemoved > 0) {
+    issues.push(`Removed ${duplicatesRemoved} duplicate records`);
+  }
+
+  return {
+    cleaned: deduped,
+    duplicatesRemoved,
+    recordsModified: modified,
+    issues,
+  };
+}
+```
+
+### Why This Matters for AI Engineering
+
+LLMs are sensitive to data quality:
+
+- **Inconsistent names** confuse entity recognition ("John Smith" vs "SMITH, JOHN" look like different people to an LLM)
+- **Duplicate records** waste tokens and skew analysis ("Widget appears 50 times" when it is really 25 records counted twice)
+- **Encoding garbage** pollutes prompts with unreadable characters
+- **Missing values** can cause hallucinations when the LLM tries to fill in gaps
+
+Cleaning your data before it enters the AI pipeline is not optional -- it directly affects the quality of your AI outputs.
+
+## Common Mistakes
+
+- **Normalizing too aggressively.** Lowercasing email addresses is fine, but lowercasing product names might lose important information (e.g., "iPhone" vs "iphone").
+- **Not preserving the original data.** Always keep the raw data alongside cleaned data so you can audit what changed.
+- **Using exact match when fuzzy match is needed.** "Jon" and "John" are probably the same person. Consider your domain when choosing a deduplication strategy.
+- **Ignoring the cleaning report.** Always log how many records were modified, removed, or flagged. If 90% of your data is "invalid," the problem is your cleaning rules, not the data.
+- **Running deduplication before normalization.** Normalize first so that "alice@gmail.com" and "Alice@Gmail.com" are recognized as duplicates.
+
+## Your Task
+
+Write a data cleaning pipeline that takes an array of raw customer records, normalizes names and emails, deduplicates by email address, removes records with missing required fields, and returns the cleaned data along with a report of what changed.

@@ -1,0 +1,399 @@
+---
+title: "Dynamic Few-Shot: Smart Example Selection"
+description: "Learn to select examples based on input similarity, build example pools, and implement relevance-based selection algorithms."
+day: "day-1"
+module: "module-2-llm-api"
+exercise: 12
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["llm", "api", "few-shot", "dynamic", "similarity", "example-selection", "relevance"]
+---
+
+## What You'll Learn
+
+- Why static examples are not always optimal
+- How to select examples dynamically based on input similarity
+- Building and managing example pools
+- Relevance-based selection algorithms
+- The performance impact of smart example selection
+
+## Key Concepts
+
+### The Problem with Static Examples
+
+In the previous exercise, every input got the same examples. But consider this: if a user asks about a billing issue, showing examples about billing is more helpful than showing examples about password resets. Dynamic few-shot selects the most relevant examples for each specific input.
+
+```typescript
+// Static: Same examples for every input (what we did before)
+const staticExamples = [
+  { input: "Can't log in", output: "technical" },
+  { input: "Overcharged on my bill", output: "billing" },
+  { input: "Want to cancel", output: "account" },
+];
+
+// Dynamic: Different examples based on what the input is about
+// Input: "My credit card was charged twice"
+// -> Select billing-related examples that are most similar
+// Input: "App keeps crashing on Android"
+// -> Select technical examples that are most similar
+```
+
+### Building an Example Pool
+
+An example pool is a collection of labeled examples that serve as candidates for selection:
+
+```typescript
+interface LabeledExample {
+  id: string;
+  input: string;
+  output: string;
+  category: string;
+  keywords: string[]; // For keyword-based matching
+}
+
+class ExamplePool {
+  private examples: LabeledExample[] = [];
+
+  add(example: LabeledExample): void {
+    this.examples.push(example);
+  }
+
+  addBatch(examples: LabeledExample[]): void {
+    this.examples.push(...examples);
+  }
+
+  getAll(): LabeledExample[] {
+    return [...this.examples];
+  }
+
+  getByCategory(category: string): LabeledExample[] {
+    return this.examples.filter((ex) => ex.category === category);
+  }
+
+  size(): number {
+    return this.examples.length;
+  }
+}
+
+// Build a substantial pool
+const pool = new ExamplePool();
+pool.addBatch([
+  {
+    id: "1",
+    input: "My account was charged twice this month",
+    output: "billing",
+    category: "billing",
+    keywords: ["charged", "twice", "account", "month", "payment"],
+  },
+  {
+    id: "2",
+    input: "I need a refund for the subscription I cancelled",
+    output: "billing",
+    category: "billing",
+    keywords: ["refund", "subscription", "cancelled", "money"],
+  },
+  {
+    id: "3",
+    input: "The app crashes whenever I open the settings page",
+    output: "technical",
+    category: "technical",
+    keywords: ["app", "crashes", "settings", "bug", "error"],
+  },
+  {
+    id: "4",
+    input: "Cannot connect to the server after the latest update",
+    output: "technical",
+    category: "technical",
+    keywords: ["connect", "server", "update", "connection", "error"],
+  },
+  {
+    id: "5",
+    input: "How do I change my email address on my account",
+    output: "account",
+    category: "account",
+    keywords: ["change", "email", "account", "update", "profile"],
+  },
+  {
+    id: "6",
+    input: "I want to upgrade from the free plan to premium",
+    output: "account",
+    category: "account",
+    keywords: ["upgrade", "plan", "premium", "free", "subscription"],
+  },
+  // ... many more examples
+]);
+```
+
+### Similarity-Based Selection
+
+The core idea: select examples that are most similar to the current input. There are several approaches from simple to sophisticated.
+
+**Approach 1: Keyword Overlap**
+
+```typescript
+function keywordSimilarity(input: string, example: LabeledExample): number {
+  const inputWords = new Set(input.toLowerCase().split(/\s+/));
+  const matchingKeywords = example.keywords.filter((kw) =>
+    inputWords.has(kw.toLowerCase())
+  );
+  return matchingKeywords.length / example.keywords.length;
+}
+
+function selectByKeywords(
+  input: string,
+  pool: ExamplePool,
+  count: number
+): LabeledExample[] {
+  const scored = pool.getAll().map((example) => ({
+    example,
+    score: keywordSimilarity(input, example),
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, count).map((s) => s.example);
+}
+```
+
+**Approach 2: TF-IDF-like Scoring**
+
+```typescript
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+}
+
+function computeTfIdf(
+  inputTokens: string[],
+  exampleTokens: string[],
+  allExamples: LabeledExample[]
+): number {
+  const totalDocs = allExamples.length;
+  let score = 0;
+
+  for (const token of inputTokens) {
+    // Term frequency in example
+    const tf = exampleTokens.filter((t) => t === token).length / exampleTokens.length;
+
+    // Inverse document frequency
+    const docsWithTerm = allExamples.filter((ex) =>
+      tokenize(ex.input).includes(token)
+    ).length;
+    const idf = Math.log(totalDocs / (1 + docsWithTerm));
+
+    score += tf * idf;
+  }
+
+  return score;
+}
+
+function selectByTfIdf(
+  input: string,
+  pool: ExamplePool,
+  count: number
+): LabeledExample[] {
+  const inputTokens = tokenize(input);
+  const allExamples = pool.getAll();
+
+  const scored = allExamples.map((example) => ({
+    example,
+    score: computeTfIdf(inputTokens, tokenize(example.input), allExamples),
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, count).map((s) => s.example);
+}
+```
+
+**Approach 3: LLM-Based Similarity (using embeddings concept)**
+
+When keyword matching is not enough, you can use the LLM itself to judge relevance:
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic();
+
+async function selectByLlmRelevance(
+  input: string,
+  pool: ExamplePool,
+  count: number
+): Promise<LabeledExample[]> {
+  const examples = pool.getAll();
+  const exampleList = examples
+    .map((ex, i) => `${i}. "${ex.input}"`)
+    .join("\n");
+
+  const response = await client.messages.create({
+    model: "claude-haiku-3-5", // Use cheap model for selection
+    max_tokens: 100,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: `Given this input: "${input}"
+
+Which of these examples are most similar in topic and intent? Return the indices of the ${count} most relevant, as a JSON array of numbers.
+
+${exampleList}
+
+Return only the JSON array, e.g. [2, 5, 1]`,
+      },
+    ],
+  });
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
+  const indices: number[] = JSON.parse(text);
+
+  return indices
+    .filter((i) => i >= 0 && i < examples.length)
+    .map((i) => examples[i]);
+}
+```
+
+### Diversity-Aware Selection
+
+Selecting only the most similar examples can lead to all examples being from the same category. Balance similarity with diversity:
+
+```typescript
+function selectDiverse(
+  input: string,
+  pool: ExamplePool,
+  count: number,
+  similarityFn: (input: string, example: LabeledExample) => number
+): LabeledExample[] {
+  const allExamples = pool.getAll();
+  const scored = allExamples.map((example) => ({
+    example,
+    score: similarityFn(input, example),
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const selected: LabeledExample[] = [];
+  const selectedCategories = new Set<string>();
+
+  for (const { example } of scored) {
+    if (selected.length >= count) break;
+
+    // Boost diversity: prefer examples from underrepresented categories
+    if (!selectedCategories.has(example.category) || selected.length >= count - 1) {
+      selected.push(example);
+      selectedCategories.add(example.category);
+    }
+  }
+
+  // If we didn't fill all slots, add top remaining by similarity
+  if (selected.length < count) {
+    for (const { example } of scored) {
+      if (selected.length >= count) break;
+      if (!selected.includes(example)) {
+        selected.push(example);
+      }
+    }
+  }
+
+  return selected;
+}
+```
+
+### Putting It All Together
+
+```typescript
+class DynamicFewShotClassifier {
+  private client: Anthropic;
+  private pool: ExamplePool;
+  private systemPrompt: string;
+  private exampleCount: number;
+
+  constructor(config: {
+    pool: ExamplePool;
+    systemPrompt: string;
+    exampleCount?: number;
+  }) {
+    this.client = new Anthropic();
+    this.pool = config.pool;
+    this.systemPrompt = config.systemPrompt;
+    this.exampleCount = config.exampleCount ?? 4;
+  }
+
+  async classify(input: string): Promise<string> {
+    // Dynamically select the most relevant examples
+    const examples = selectDiverse(
+      input,
+      this.pool,
+      this.exampleCount,
+      keywordSimilarity
+    );
+
+    // Build the prompt with selected examples
+    const exampleText = examples
+      .map((ex) => `Input: "${ex.input}"\nClassification: ${ex.output}`)
+      .join("\n\n");
+
+    const response = await this.client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 20,
+      temperature: 0,
+      system: this.systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: `${exampleText}
+
+Now classify:
+Input: "${input}"
+Classification:`,
+        },
+      ],
+    });
+
+    return response.content[0].type === "text"
+      ? response.content[0].text.trim()
+      : "";
+  }
+}
+
+// Usage
+const classifier = new DynamicFewShotClassifier({
+  pool,
+  systemPrompt:
+    "You are a support ticket classifier. Classify tickets as: billing, technical, or account. Respond with only the category.",
+  exampleCount: 4,
+});
+
+const result = await classifier.classify(
+  "I was charged $50 but my plan is only $30"
+);
+console.log(result); // "billing" - selected with relevant billing examples
+```
+
+## Common Mistakes
+
+1. **Selecting examples only by similarity, ignoring diversity**: If all selected examples are about billing, the model is biased toward billing. Ensure category representation in your selection.
+
+2. **Using an expensive model for example selection**: The selection step should be fast and cheap. Use keyword matching or a small model, not your largest model.
+
+3. **Too small an example pool**: Dynamic selection only helps if you have a rich pool to select from. With fewer than 10 examples, static few-shot is probably fine.
+
+4. **Not caching selection results**: If the same input type comes up repeatedly, cache which examples were selected to avoid recomputing similarity.
+
+5. **Over-engineering the similarity function**: Start with keyword overlap. It is simple, fast, and surprisingly effective. Only move to more complex methods if keyword matching measurably fails on your data.
+
+## Your Task
+
+Build a dynamic few-shot classification system that:
+
+1. Creates an `ExamplePool` with at least 15 labeled examples across 3+ categories
+2. Implements keyword-based similarity selection
+3. Implements diversity-aware selection that ensures category coverage
+4. Builds a `DynamicFewShotClassifier` class that selects examples per-input
+5. Compares performance of static few-shot (fixed examples) vs dynamic few-shot on a test set of 10+ cases
+
+Print a table showing which examples were selected for each test input, and the accuracy of static vs dynamic approaches.
+
+Bonus: Implement caching so that similar inputs reuse previously selected examples, and measure the performance impact of the cache.

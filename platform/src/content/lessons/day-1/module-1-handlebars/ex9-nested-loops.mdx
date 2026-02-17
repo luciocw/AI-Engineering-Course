@@ -1,0 +1,234 @@
+---
+title: "Nested Loops"
+description: "Nesting each blocks, accessing parent context with ../, root context with @root, and managing @index in nested loops."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 9
+difficulty: "intermediate"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "nested-each", "parent-context", "root-context", "loops"]
+---
+
+## What You'll Learn
+
+You will learn how to nest `{{#each}}` blocks for multi-level data, access the parent context with `../`, reach the root context with `@root`, and manage index variables in nested loops.
+
+## Key Concepts
+
+### Nested `{{#each}}` Blocks
+
+Real data often has arrays inside arrays. A department has employees, a course has modules, a conversation has messages. You handle this by nesting `{{#each}}` blocks:
+
+```typescript
+import Handlebars from "handlebars";
+
+const template = Handlebars.compile(`
+{{#each departments}}
+Department: {{this.name}}
+  {{#each this.employees}}
+  - {{this.name}} ({{this.role}})
+  {{/each}}
+{{/each}}
+`);
+
+const result = template({
+  departments: [
+    {
+      name: "Engineering",
+      employees: [
+        { name: "Alice", role: "Senior Developer" },
+        { name: "Bob", role: "Junior Developer" },
+      ],
+    },
+    {
+      name: "Design",
+      employees: [
+        { name: "Carol", role: "UX Designer" },
+      ],
+    },
+  ],
+});
+```
+
+The outer `{{#each departments}}` iterates over departments. For each department, the inner `{{#each this.employees}}` iterates over that department's employees.
+
+### Context Changes with Each Level
+
+Every `{{#each}}` block shifts the context. Inside the outer loop, `this` refers to the current department. Inside the inner loop, `this` shifts to the current employee. This means you cannot directly reference the department's name from inside the employee loop:
+
+```typescript
+// Inside the inner loop, "this" is the employee, not the department
+const template = Handlebars.compile(`
+{{#each departments}}
+  {{#each this.employees}}
+  {{this.name}} works in {{this.name}}
+  {{/each}}
+{{/each}}
+`);
+// PROBLEM: Both {{this.name}} refer to the employee's name!
+```
+
+To access the parent context, you need the `../` syntax.
+
+### Accessing Parent Context with `../`
+
+The `../` prefix moves up one context level, just like `../` in file system paths:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each departments}}
+  {{#each this.employees}}
+  - {{this.name}} works in {{../name}} department
+  {{/each}}
+{{/each}}
+`);
+
+const result = template({
+  departments: [
+    {
+      name: "Engineering",
+      employees: [
+        { name: "Alice", role: "Developer" },
+        { name: "Bob", role: "Developer" },
+      ],
+    },
+  ],
+});
+// "- Alice works in Engineering department"
+// "- Bob works in Engineering department"
+```
+
+Here, `{{../name}}` reaches up from the employee context to the department context to access the department's `name` property.
+
+You can chain `../` to go up multiple levels:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each company.divisions}}
+  {{#each this.teams}}
+    {{#each this.members}}
+    {{this}} - Team: {{../name}} - Division: {{../../name}}
+    {{/each}}
+  {{/each}}
+{{/each}}
+`);
+```
+
+Each `../` goes up one `{{#each}}` level. Two levels: `../../`.
+
+### Accessing Root Context with `@root`
+
+Sometimes you need data from the very top level of your context, regardless of how deeply nested you are. The `@root` variable always points to the original root context:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each categories}}
+  {{#each this.items}}
+  [{{@root.storeName}}] {{../name}}: {{this.title}} - ${{this.price}}
+  {{/each}}
+{{/each}}
+`);
+
+const result = template({
+  storeName: "Tech Shop",
+  categories: [
+    {
+      name: "Laptops",
+      items: [
+        { title: "MacBook Pro", price: 2499 },
+        { title: "ThinkPad X1", price: 1899 },
+      ],
+    },
+    {
+      name: "Accessories",
+      items: [
+        { title: "USB-C Hub", price: 49 },
+      ],
+    },
+  ],
+});
+// "[Tech Shop] Laptops: MacBook Pro - $2499"
+// "[Tech Shop] Laptops: ThinkPad X1 - $1899"
+// "[Tech Shop] Accessories: USB-C Hub - $49"
+```
+
+`@root.storeName` accesses the root-level `storeName` from inside two levels of nesting. No matter how deep you go, `@root` always refers to the original context object.
+
+### Managing `@index` in Nested Loops
+
+Each `{{#each}}` block has its own `@index`. Inside a nested loop, `@index` refers to the inner loop's index. To access the outer loop's index, use `@../index`:
+
+```typescript
+const template = Handlebars.compile(`
+{{#each sections}}
+Section {{@index}}:
+  {{#each this.questions}}
+  Q{{@../index}}.{{@index}}: {{this}}
+  {{/each}}
+{{/each}}
+`);
+
+const result = template({
+  sections: [
+    { questions: ["What is AI?", "What is ML?"] },
+    { questions: ["Define a template", "What is Handlebars?"] },
+  ],
+});
+// "Section 0:"
+// "Q0.0: What is AI?"
+// "Q0.1: What is ML?"
+// "Section 1:"
+// "Q1.0: Define a template"
+// "Q1.1: What is Handlebars?"
+```
+
+### Nested Loops in AI Engineering
+
+A common AI pattern is building prompts from conversation history, where each conversation has multiple messages:
+
+```typescript
+const template = Handlebars.compile(`
+You are analyzing customer support conversations.
+
+{{#each conversations}}
+--- Conversation {{@index}} (Customer: {{this.customerName}}) ---
+{{#each this.messages}}
+[{{this.role}}]: {{this.content}}
+{{/each}}
+{{/each}}
+
+Summarize the main issues across all conversations.
+`);
+
+const prompt = template({
+  conversations: [
+    {
+      customerName: "Alice",
+      messages: [
+        { role: "customer", content: "My order hasn't arrived." },
+        { role: "agent", content: "Let me check that for you." },
+        { role: "customer", content: "It's been 2 weeks." },
+      ],
+    },
+    {
+      customerName: "Bob",
+      messages: [
+        { role: "customer", content: "I need to return an item." },
+        { role: "agent", content: "Sure, I can help with that." },
+      ],
+    },
+  ],
+});
+```
+
+## Common Mistakes
+
+- **Forgetting that context shifts inside each `{{#each}}`.** Once you enter an `{{#each}}` block, `this` points to the current item, not the parent. Use `../` to reach parent properties.
+- **Using too many `../` levels.** If you need `../../../something`, your template is probably too complex. Consider flattening your data or using `@root` instead.
+- **Confusing `@index` between nesting levels.** Inside a nested loop, `@index` belongs to the innermost loop. Use `@../index` to access the outer loop's index.
+- **Forgetting that `@root` always points to the original context.** This is your escape hatch from deep nesting. Use it freely when you need top-level data.
+
+## Your Task
+
+Create a template with nested `{{#each}}` blocks that displays a multi-level data structure. Use `../` to access a parent property from the inner loop, and use `@root` to access a root-level value. Display the `@index` from both the outer and inner loops.

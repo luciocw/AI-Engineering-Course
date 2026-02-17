@@ -1,0 +1,287 @@
+---
+title: "Template Registry"
+description: "Building a TemplateRegistry class that encapsulates templates, helpers, and partials with OOP patterns."
+day: "day-1"
+module: "module-1-handlebars"
+exercise: 17
+difficulty: "advanced"
+estimatedMinutes: 25
+isFree: true
+tags: ["handlebars", "templates", "registry", "class", "oop", "encapsulation", "architecture"]
+---
+
+## What You'll Learn
+
+You will learn how to build a `TemplateRegistry` class that organizes templates, helpers, and partials into a self-contained unit, understand why encapsulation matters for production template systems, and apply object-oriented patterns to template management.
+
+## Key Concepts
+
+### Why a Registry?
+
+So far, you have been registering helpers and partials on the global `Handlebars` object. This works fine for small scripts, but it has problems at scale:
+
+1. **Global pollution** -- All helpers and partials share one namespace. Two different parts of your app might register conflicting helpers.
+2. **No isolation** -- A helper registered in one module is visible everywhere. Testing becomes harder when state is global.
+3. **No organization** -- There is no way to group related templates, helpers, and partials together.
+
+A `TemplateRegistry` solves these problems by creating an isolated Handlebars environment.
+
+### Handlebars.create() for Isolation
+
+Handlebars provides `Handlebars.create()` which creates a new, independent Handlebars environment. Helpers and partials registered on one environment do not affect another:
+
+```typescript
+import Handlebars from "handlebars";
+
+const env1 = Handlebars.create();
+const env2 = Handlebars.create();
+
+env1.registerHelper("greet", () => "Hello from env1");
+env2.registerHelper("greet", () => "Hello from env2");
+
+const t1 = env1.compile("{{greet}}");
+const t2 = env2.compile("{{greet}}");
+
+console.log(t1({})); // "Hello from env1"
+console.log(t2({})); // "Hello from env2"
+```
+
+Each environment is fully independent. This is the foundation of a template registry.
+
+### Building the TemplateRegistry Class
+
+Here is a `TemplateRegistry` class that encapsulates a Handlebars environment:
+
+```typescript
+import Handlebars from "handlebars";
+
+class TemplateRegistry {
+  private handlebars: typeof Handlebars;
+  private compiledTemplates: Map<string, HandlebarsTemplateDelegate>;
+
+  constructor() {
+    this.handlebars = Handlebars.create();
+    this.compiledTemplates = new Map();
+  }
+
+  registerHelper(name: string, fn: Handlebars.HelperDelegate): void {
+    this.handlebars.registerHelper(name, fn);
+  }
+
+  registerPartial(name: string, template: string): void {
+    this.handlebars.registerPartial(name, template);
+  }
+
+  registerTemplate(name: string, templateString: string): void {
+    const compiled = this.handlebars.compile(templateString);
+    this.compiledTemplates.set(name, compiled);
+  }
+
+  render(templateName: string, context: Record<string, any>): string {
+    const template = this.compiledTemplates.get(templateName);
+    if (!template) {
+      throw new Error(`Template "${templateName}" not found in registry.`);
+    }
+    return template(context);
+  }
+
+  hasTemplate(name: string): boolean {
+    return this.compiledTemplates.has(name);
+  }
+}
+```
+
+### Using the Registry
+
+The registry provides a clean API for managing templates:
+
+```typescript
+const registry = new TemplateRegistry();
+
+// Register helpers
+registry.registerHelper("uppercase", (str: string) =>
+  typeof str === "string" ? str.toUpperCase() : ""
+);
+
+registry.registerHelper("truncate", (str: string, len: number) => {
+  if (typeof str !== "string") return "";
+  return str.length <= len ? str : str.substring(0, len) + "...";
+});
+
+// Register partials
+registry.registerPartial(
+  "header",
+  "=== {{uppercase title}} ==="
+);
+
+// Register templates
+registry.registerTemplate(
+  "report",
+  `{{> header}}
+
+{{#each items}}
+- {{this.name}}: {{truncate this.description 40}}
+{{/each}}
+
+Generated at: {{timestamp}}`
+);
+
+// Render
+const output = registry.render("report", {
+  title: "Weekly Summary",
+  items: [
+    { name: "Task A", description: "Completed the initial design phase for the new feature" },
+    { name: "Task B", description: "Fixed three critical bugs in the authentication module" },
+  ],
+  timestamp: "2024-01-15 10:00",
+});
+```
+
+Everything is contained within the registry. No global state is modified.
+
+### Adding Bulk Registration
+
+For real projects, you often want to register many helpers or templates at once:
+
+```typescript
+class TemplateRegistry {
+  // ... previous methods ...
+
+  registerHelpers(helpers: Record<string, Handlebars.HelperDelegate>): void {
+    for (const [name, fn] of Object.entries(helpers)) {
+      this.handlebars.registerHelper(name, fn);
+    }
+  }
+
+  registerPartials(partials: Record<string, string>): void {
+    for (const [name, template] of Object.entries(partials)) {
+      this.handlebars.registerPartial(name, template);
+    }
+  }
+
+  registerTemplates(templates: Record<string, string>): void {
+    for (const [name, templateString] of Object.entries(templates)) {
+      this.registerTemplate(name, templateString);
+    }
+  }
+
+  listTemplates(): string[] {
+    return Array.from(this.compiledTemplates.keys());
+  }
+}
+```
+
+Usage becomes more concise:
+
+```typescript
+const registry = new TemplateRegistry();
+
+registry.registerHelpers({
+  uppercase: (s: string) => s?.toUpperCase() ?? "",
+  lowercase: (s: string) => s?.toLowerCase() ?? "",
+  eq: (a: any, b: any) => a === b,
+});
+
+registry.registerPartials({
+  systemPrompt: "You are a {{role}} assistant.",
+  userMessage: "User: {{message}}",
+});
+
+registry.registerTemplates({
+  chat: "{{> systemPrompt}}\n\n{{> userMessage}}",
+  summary: "Summarize: {{content}}",
+});
+```
+
+### Factory Pattern for Pre-configured Registries
+
+You can create factory functions that return registries pre-loaded with common helpers:
+
+```typescript
+function createAIPromptRegistry(): TemplateRegistry {
+  const registry = new TemplateRegistry();
+
+  // Standard comparison helpers
+  registry.registerHelpers({
+    eq: (a: any, b: any) => a === b,
+    gt: (a: number, b: number) => a > b,
+    lt: (a: number, b: number) => a < b,
+    and: (a: any, b: any) => a && b,
+    or: (a: any, b: any) => a || b,
+    not: (a: any) => !a,
+  });
+
+  // AI-specific helpers
+  registry.registerHelpers({
+    tokenEstimate: (s: string) => Math.ceil((s?.length ?? 0) / 4),
+    truncateTokens: (s: string, maxTokens: number) => {
+      if (typeof s !== "string") return "";
+      const maxChars = maxTokens * 4;
+      return s.length <= maxChars ? s : s.substring(0, maxChars) + "...";
+    },
+  });
+
+  return registry;
+}
+
+const aiRegistry = createAIPromptRegistry();
+aiRegistry.registerTemplate(
+  "classify",
+  `You are a classification assistant.
+Classify the following text into one of: {{categories}}.
+
+Text: {{truncateTokens text 500}}
+
+Category:`
+);
+```
+
+### Registry Pattern in AI Engineering
+
+In production AI systems, different features often need different prompt templates with different helpers. A registry per feature keeps things organized:
+
+```typescript
+// Customer support feature
+const supportRegistry = createAIPromptRegistry();
+supportRegistry.registerPartials({
+  ticketContext: "Ticket #{{ticketId}} | Priority: {{priority}} | Status: {{status}}",
+  customerInfo: "Customer: {{name}} ({{tier}} tier, member since {{joinDate}})",
+});
+supportRegistry.registerTemplate(
+  "resolveTicket",
+  `{{> customerInfo}}
+{{> ticketContext}}
+
+Conversation:
+{{#each messages}}
+[{{this.role}}]: {{this.content}}
+{{/each}}
+
+Suggest a resolution for this support ticket.`
+);
+
+// Analytics feature (completely separate)
+const analyticsRegistry = createAIPromptRegistry();
+analyticsRegistry.registerTemplate(
+  "analyzeMetrics",
+  `Analyze these metrics and identify trends:
+{{#each metrics}}
+- {{@key}}: {{this}}
+{{/each}}
+
+Provide insights and recommendations.`
+);
+```
+
+Each registry is isolated. Changes to the support registry cannot affect analytics templates.
+
+## Common Mistakes
+
+- **Forgetting to use `Handlebars.create()` for isolation.** If you use the global `Handlebars` object inside your registry class, helpers from one registry leak into another. Always create an isolated environment.
+- **Registering templates before helpers and partials.** Templates are compiled when you register them. If a template references a helper or partial that is not yet registered, it may fail. Register helpers and partials first, then templates.
+- **Not handling missing templates.** Calling `render()` with a name that does not exist should throw a clear error, not return `undefined`. Always validate before rendering.
+- **Over-engineering the registry.** Start with the simple version (register, render) and add features only as needed. You do not need lazy compilation, caching, or hot-reloading until you actually need them.
+
+## Your Task
+
+Build a `TemplateRegistry` class that uses `Handlebars.create()` for isolation. It should support registering helpers, partials, and named templates. Register at least two helpers, one partial, and two templates. Render both templates and verify the output is correct. Confirm that the registry's helpers do not leak to the global Handlebars environment.
