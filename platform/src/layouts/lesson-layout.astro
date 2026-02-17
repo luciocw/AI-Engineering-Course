@@ -1,0 +1,35 @@
+---
+import BaseLayout from './base-layout.astro';
+import Header from '@/components/astro/Header.astro';
+import Breadcrumb from '@/components/astro/Breadcrumb.astro';
+
+type Props = {
+  title: string;
+  description?: string;
+  breadcrumbs: Array<{ label: string; href?: string }>;
+};
+
+const { title, description, breadcrumbs } = Astro.props;
+---
+
+<BaseLayout title={title} description={description}>
+  <Header variant="lesson" />
+
+  <div class="flex min-h-[calc(100dvh-64px)] pt-16">
+    <!-- Sidebar -->
+    <aside
+      class="fixed left-0 top-16 bottom-0 w-[280px] border-r border-border bg-bg overflow-y-auto hidden lg:block"
+      transition:persist
+    >
+      <slot name="sidebar" />
+    </aside>
+
+    <!-- Content -->
+    <div class="flex-1 lg:ml-[280px]">
+      <div class="max-w-[768px] mx-auto px-6 py-10 lg:px-10">
+        <Breadcrumb items={breadcrumbs} />
+        <slot />
+      </div>
+    </div>
+  </div>
+</BaseLayout>

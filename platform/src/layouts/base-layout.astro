@@ -1,0 +1,55 @@
+---
+import '@/styles/global.css';
+import { ViewTransitions } from 'astro:transitions';
+
+type Props = {
+  title: string;
+  description?: string;
+  ogImage?: string;
+};
+
+const {
+  title,
+  description = 'From your first Claude API call to a deployed multi-agent system. 4 days. 4 portfolio repos. All TypeScript.',
+  ogImage = '/og-image.png',
+} = Astro.props;
+
+const siteUrl = import.meta.env.PUBLIC_SITE_URL || 'https://ai-engineering.dev';
+const fullTitle = title === 'AI Engineering' ? title : `${title} | AI Engineering`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+
+    <!-- SEO -->
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={new URL(Astro.url.pathname, siteUrl).href} />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={new URL(ogImage, siteUrl).href} />
+    <meta property="og:url" content={new URL(Astro.url.pathname, siteUrl).href} />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={new URL(ogImage, siteUrl).href} />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href={`${import.meta.env.BASE_URL}favicon.svg`} />
+
+    <!-- View Transitions -->
+    <ViewTransitions />
+  </head>
+  <body class="bg-bg text-text min-h-dvh overflow-x-hidden">
+    <slot />
+  </body>
+</html>

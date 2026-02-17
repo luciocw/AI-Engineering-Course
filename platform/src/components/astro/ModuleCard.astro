@@ -1,0 +1,77 @@
+---
+type Props = {
+  title: string;
+  description: string;
+  href: string;
+  exerciseCount: number;
+  completedCount?: number;
+  icon: string;
+  index: number;
+};
+
+const { title, description, href, exerciseCount, completedCount = 0, icon, index } = Astro.props;
+const progress = exerciseCount > 0 ? (completedCount / exerciseCount) * 100 : 0;
+const circumference = 2 * Math.PI * 18;
+const strokeDashoffset = circumference - (progress / 100) * circumference;
+---
+
+<a
+  href={href}
+  class="group relative block rounded-2xl border border-border bg-surface p-6 hover:border-accent/30 hover:bg-surface-hover transition-all duration-(--duration-medium) hover:shadow-[0_0_40px_var(--color-accent-glow)] animate-fade-in"
+  style={`animation-delay: ${index * 100}ms`}
+>
+  <!-- Progress ring -->
+  <div class="absolute top-5 right-5">
+    <svg class="w-11 h-11 -rotate-90" viewBox="0 0 40 40">
+      <circle
+        cx="20" cy="20" r="18"
+        fill="none"
+        stroke="var(--color-border)"
+        stroke-width="2"
+      />
+      <circle
+        cx="20" cy="20" r="18"
+        fill="none"
+        stroke={progress === 100 ? 'var(--color-success)' : 'var(--color-accent)'}
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-dasharray={circumference}
+        stroke-dashoffset={strokeDashoffset}
+        class="transition-all duration-700"
+      />
+    </svg>
+    <span class="absolute inset-0 flex items-center justify-center text-[10px] font-mono text-text-muted">
+      {completedCount}/{exerciseCount}
+    </span>
+  </div>
+
+  <!-- Icon -->
+  <div class="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center text-accent mb-4 group-hover:bg-accent/20 transition-colors">
+    <span class="text-lg">{icon}</span>
+  </div>
+
+  <!-- Content -->
+  <h3 class="font-display font-semibold text-lg text-text mb-2 pr-12 group-hover:text-accent transition-colors">
+    {title}
+  </h3>
+  <p class="text-sm text-text-secondary leading-relaxed line-clamp-2">
+    {description}
+  </p>
+
+  <!-- Meta -->
+  <div class="mt-4 flex items-center gap-3 text-xs text-text-muted">
+    <span class="flex items-center gap-1">
+      <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+      </svg>
+      {exerciseCount} exercises
+    </span>
+  </div>
+
+  <!-- Hover arrow -->
+  <div class="absolute bottom-5 right-5 opacity-0 group-hover:opacity-100 transition-all duration-(--duration-medium) translate-x-[-4px] group-hover:translate-x-0">
+    <svg class="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+    </svg>
+  </div>
+</a>

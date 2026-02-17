@@ -1,0 +1,91 @@
+---
+import LessonLayout from '@/layouts/lesson-layout.astro';
+import ExercisePlayground from '@/components/react/ExercisePlayground';
+import ExerciseSidebar from '@/components/react/ExerciseSidebar';
+import { getAllExercisePaths, getAdjacentExercises, canRunInBrowser } from '@/lib/course/exercises';
+import { url } from '@/lib/url';
+
+export function getStaticPaths() {
+  return getAllExercisePaths();
+}
+
+const { exercise, module: mod, day } = Astro.props;
+const { prev, next } = getAdjacentExercises(mod.slug, exercise.slug);
+
+// Load all exercise and solution files at build time
+const exerciseFiles = import.meta.glob(
+  '/../dia-1/**/exercicios/*.ts',
+  { query: '?raw', import: 'default', eager: true }
+) as Record<string, string>;
+
+const solutionFiles = import.meta.glob(
+  '/../dia-1/**/solucoes/*.ts',
+  { query: '?raw', import: 'default', eager: true }
+) as Record<string, string>;
+
+// Map English slugs to filesystem directory names (PT-BR on disk)
+const slugToDirMap: Record<string, string> = {
+  'module-1-handlebars': 'modulo-1-handlebars',
+  'module-2-llm-api': 'modulo-2-claude-api',
+  'module-3-tool-use': 'modulo-3-tool-use',
+  'module-4-data-pipelines': 'modulo-4-data-pipelines',
+};
+
+// Find the matching files for this exercise
+function findFile(files: Record<string, string>, moduleSlug: string, exerciseSlug: string): string {
+  const dirName = slugToDirMap[moduleSlug] ?? moduleSlug;
+  for (const [path, content] of Object.entries(files)) {
+    if (path.includes(dirName) && path.includes(exerciseSlug)) {
+      return content;
+    }
+  }
+  return `// File not found: ${moduleSlug}/${exerciseSlug}`;
+}
+
+const exerciseCode = findFile(exerciseFiles, mod.slug, exercise.slug);
+const solutionCode = findFile(solutionFiles, mod.slug, exercise.slug);
+
+// Prepare sidebar data
+const sidebarExercises = mod.exercises.map((ex: typeof exercise) => ({
+  slug: ex.slug,
+  title: ex.title,
+  difficulty: ex.difficulty,
+}));
+---
+
+<LessonLayout
+  title={`${exercise.title} — ${mod.title} — Build.AI`}
+  description={exercise.description}
+  breadcrumbs={[
+    { label: 'Home', href: url('/') },
+    { label: 'Day 1', href: url('/day-1') },
+    { label: mod.title, href: url(`/day-1/${mod.slug}`) },
+    { label: exercise.title },
+  ]}
+>
+  <Fragment slot="sidebar">
+    <ExerciseSidebar
+      client:load
+      exercises={sidebarExercises}
+      currentSlug={exercise.slug}
+      moduleSlug={mod.slug}
+      moduleTitle={mod.title}
+      basePath={import.meta.env.BASE_URL.replace(/\/$/, '')}
+    />
+  </Fragment>
+
+  <ExercisePlayground
+    client:load
+    exerciseCode={exerciseCode}
+    solutionCode={solutionCode}
+    exerciseSlug={exercise.slug}
+    moduleSlug={mod.slug}
+    title={exercise.title}
+    description={exercise.description}
+    difficulty={exercise.difficulty}
+    estimatedMinutes={exercise.estimatedMinutes}
+    canRunInBrowser={canRunInBrowser(mod.slug)}
+    prevExercise={prev}
+    nextExercise={next}
+  />
+</LessonLayout>

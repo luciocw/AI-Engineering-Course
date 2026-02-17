@@ -1,0 +1,555 @@
+---
+import MarketingLayout from '@/layouts/marketing-layout.astro';
+import { COURSE_MANIFEST, getTotalExercises } from '@/lib/course/manifest';
+import { url } from '@/lib/url';
+
+const totalExercises = getTotalExercises();
+---
+
+<MarketingLayout title="AI Engineering" description="From your first Claude API call to a deployed multi-agent system. 4 days. 4 portfolio repos. All TypeScript.">
+
+  <!-- =========================================
+       ELEMENT 1: Hero Section
+       ========================================= -->
+  <section class="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
+    <!-- Mesh gradient background -->
+    <div class="absolute inset-0 -z-20">
+      <div class="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(6,182,212,0.15),transparent)]"></div>
+      <div class="absolute inset-0 bg-[radial-gradient(ellipse_60%_40%_at_80%_60%,rgba(99,102,241,0.08),transparent)]"></div>
+      <div class="absolute inset-0 bg-[radial-gradient(ellipse_50%_30%_at_20%_80%,rgba(6,182,212,0.06),transparent)]"></div>
+    </div>
+
+    <!-- Grain overlay -->
+    <div class="absolute inset-0 -z-10 grain-overlay pointer-events-none"></div>
+
+    <!-- Cursor glow effect container -->
+    <div id="cursor-glow" class="absolute inset-0 -z-10 pointer-events-none opacity-0 transition-opacity duration-500"></div>
+
+    <div class="mx-auto max-w-7xl px-6 py-24 lg:py-32">
+      <div class="grid lg:grid-cols-2 gap-16 items-center">
+        <!-- Left: Text content -->
+        <div>
+          <!-- Title — staggered word-by-word -->
+          <h1 class="font-display font-bold tracking-tight leading-[1.1]">
+            <span class="block text-[clamp(2.5rem,5vw,4.5rem)] animate-fade-in" style="animation-delay: 0ms">Build AI Products.</span>
+            <span class="block text-[clamp(2.5rem,5vw,4.5rem)] animate-fade-in" style="animation-delay: 150ms">
+              Ship to <span class="text-accent">Production.</span>
+            </span>
+          </h1>
+
+          <!-- Subtitle -->
+          <p class="mt-6 text-lg lg:text-xl text-text-secondary max-w-lg leading-relaxed animate-fade-in" style="animation-delay: 400ms">
+            From your first Claude API call to a deployed multi-agent system.
+            <span class="text-text font-medium">4 days. 4 portfolio repos.</span>
+            All TypeScript.
+          </p>
+
+          <!-- ELEMENT 4: Primary CTA -->
+          <div class="mt-10 flex flex-col sm:flex-row items-start gap-4 animate-fade-in" style="animation-delay: 600ms">
+            <a
+              href={url('/day-1')}
+              class="group inline-flex items-center gap-2 px-10 py-4 text-lg font-semibold font-display rounded-xl bg-accent text-bg hover:bg-accent-hover shadow-[0_0_30px_var(--color-accent-glow)] hover:shadow-[0_0_50px_var(--color-accent-glow-strong)] hover:scale-[1.03] transition-all duration-(--duration-medium)"
+            >
+              Start Learning — Free
+              <svg class="w-5 h-5 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </a>
+            <a
+              href="https://github.com/luciocw/AI-Engineering-Course"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-2 px-6 py-4 text-sm font-medium text-text-secondary hover:text-accent transition-colors"
+            >
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+              </svg>
+              View on GitHub
+            </a>
+          </div>
+
+          <!-- ELEMENT 5: Social Proof — Animated counters -->
+          <div class="mt-14 flex items-center gap-8 animate-fade-in" style="animation-delay: 800ms">
+            <div class="text-center">
+              <div class="font-display font-bold text-2xl text-text" data-count="80" data-suffix="+">0</div>
+              <div class="text-xs text-text-muted mt-1">Exercises</div>
+            </div>
+            <div class="w-px h-8 bg-border"></div>
+            <div class="text-center">
+              <div class="font-display font-bold text-2xl text-text" data-count="260" data-suffix="+">0</div>
+              <div class="text-xs text-text-muted mt-1">Tests Passing</div>
+            </div>
+            <div class="w-px h-8 bg-border"></div>
+            <div class="text-center">
+              <div class="font-display font-bold text-2xl text-text" data-count="4">0</div>
+              <div class="text-xs text-text-muted mt-1">Portfolio Repos</div>
+            </div>
+          </div>
+
+          <!-- Tech logos -->
+          <div class="mt-8 flex items-center gap-5 animate-fade-in" style="animation-delay: 1000ms">
+            {['TypeScript', 'Claude', 'Zod', 'Docker', 'Vitest'].map((tech) => (
+              <span class="text-xs font-mono text-text-muted/50 hover:text-accent/70 transition-colors cursor-default">
+                {tech}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <!-- Right: ELEMENT 6 — 3D Code Preview -->
+        <div class="relative hidden lg:block animate-fade-in" style="animation-delay: 500ms">
+          <!-- Glow behind code block -->
+          <div class="absolute -inset-8 bg-accent/5 rounded-3xl blur-3xl"></div>
+
+          <!-- 3D floating code block -->
+          <div
+            id="hero-code"
+            class="relative rounded-2xl border border-border bg-surface overflow-hidden shadow-2xl"
+            style="transform: perspective(1200px) rotateY(-6deg) rotateX(3deg); transition: transform 0.3s ease-out;"
+          >
+            <!-- Terminal header -->
+            <div class="flex items-center gap-2 px-4 py-3 border-b border-border bg-surface/50">
+              <div class="flex gap-1.5">
+                <div class="w-3 h-3 rounded-full bg-error/60"></div>
+                <div class="w-3 h-3 rounded-full bg-warning/60"></div>
+                <div class="w-3 h-3 rounded-full bg-success/60"></div>
+              </div>
+              <span class="ml-2 text-xs font-mono text-text-muted">ex1-hello-world.ts</span>
+            </div>
+
+            <!-- Code content -->
+            <div class="p-5 font-mono text-sm leading-relaxed">
+              <div><span class="text-[#c678dd]">import</span> <span class="text-text">Anthropic</span> <span class="text-[#c678dd]">from</span> <span class="text-[#98c379]">'@anthropic-ai/sdk'</span><span class="text-text-muted">;</span></div>
+              <div class="mt-1"></div>
+              <div><span class="text-[#c678dd]">const</span> <span class="text-[#e5c07b]">client</span> <span class="text-text-muted">=</span> <span class="text-[#c678dd]">new</span> <span class="text-[#e5c07b]">Anthropic</span><span class="text-text-muted">();</span></div>
+              <div class="mt-3"></div>
+              <div><span class="text-[#c678dd]">const</span> <span class="text-[#e5c07b]">message</span> <span class="text-text-muted">=</span> <span class="text-[#c678dd]">await</span> <span class="text-[#e5c07b]">client</span><span class="text-text-muted">.</span><span class="text-[#61afef]">messages</span><span class="text-text-muted">.</span><span class="text-[#61afef]">create</span><span class="text-text-muted">({"{"}</span></div>
+              <div class="pl-4"><span class="text-[#e06c75]">model</span><span class="text-text-muted">:</span> <span class="text-[#98c379]">'claude-sonnet-4-5-20250929'</span><span class="text-text-muted">,</span></div>
+              <div class="pl-4"><span class="text-[#e06c75]">max_tokens</span><span class="text-text-muted">:</span> <span class="text-[#d19a66]">1024</span><span class="text-text-muted">,</span></div>
+              <div class="pl-4"><span class="text-[#e06c75]">messages</span><span class="text-text-muted">:</span> <span class="text-text-muted">[{"{"}</span></div>
+              <div class="pl-8"><span class="text-[#e06c75]">role</span><span class="text-text-muted">:</span> <span class="text-[#98c379]">'user'</span><span class="text-text-muted">,</span></div>
+              <div class="pl-8"><span class="text-[#e06c75]">content</span><span class="text-text-muted">:</span> <span class="text-[#98c379]">'What is AI Engineering?'</span></div>
+              <div class="pl-4"><span class="text-text-muted">{"}"}],</span></div>
+              <div><span class="text-text-muted">{"}"});</span></div>
+              <div class="mt-3"></div>
+              <div><span class="text-[#61afef]">console</span><span class="text-text-muted">.</span><span class="text-[#61afef]">log</span><span class="text-text-muted">(</span><span class="text-[#e5c07b]">message</span><span class="text-text-muted">.</span><span class="text-[#61afef]">content</span><span class="text-text-muted">[</span><span class="text-[#d19a66]">0</span><span class="text-text-muted">].</span><span class="text-[#61afef]">text</span><span class="text-text-muted">);</span></div>
+            </div>
+
+            <!-- Animated cursor blink -->
+            <div class="absolute bottom-5 right-5">
+              <div class="w-2 h-5 bg-accent/60 animate-pulse rounded-sm"></div>
+            </div>
+          </div>
+
+          <!-- Floating solution toggle preview -->
+          <div class="absolute -bottom-6 -left-6 glass rounded-xl p-3 shadow-xl animate-float" style="animation-delay: 2s">
+            <div class="flex items-center gap-2 text-xs">
+              <div class="w-6 h-6 rounded-lg bg-accent/10 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+              </div>
+              <span class="text-text-secondary">Toggle Solution</span>
+            </div>
+          </div>
+
+          <!-- Floating test badge -->
+          <div class="absolute -top-3 -right-3 glass rounded-xl p-3 shadow-xl animate-float" style="animation-delay: 0.5s">
+            <div class="flex items-center gap-2 text-xs">
+              <div class="w-6 h-6 rounded-lg bg-success/10 flex items-center justify-center">
+                <svg class="w-3.5 h-3.5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <span class="text-success">260+ tests passing</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scroll indicator -->
+    <div class="absolute bottom-8 left-1/2 -translate-x-1/2 animate-fade-in" style="animation-delay: 1200ms">
+      <div class="flex flex-col items-center gap-2">
+        <span class="text-xs text-text-muted">Scroll</span>
+        <div class="w-5 h-8 rounded-full border border-border flex items-start justify-center p-1">
+          <div class="w-1 h-2 rounded-full bg-accent animate-bounce"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================
+       ELEMENT 7: Benefits / Features
+       ========================================= -->
+  <section class="relative py-32 px-6">
+    <div class="mx-auto max-w-7xl" data-animate-on-scroll>
+      <!-- Section header -->
+      <div class="text-center mb-16">
+        <h2 class="font-display font-bold text-3xl lg:text-4xl tracking-tight">
+          Everything you need to <span class="text-accent">build with AI</span>
+        </h2>
+        <p class="mt-4 text-text-secondary text-lg max-w-2xl mx-auto">
+          Not another tutorial. A production-ready curriculum with real API calls, tested code, and portfolio projects.
+        </p>
+      </div>
+
+      <!-- 2x2 asymmetric grid -->
+      <div class="grid md:grid-cols-2 gap-6">
+        <!-- Card 1 — spans full width on first row  -->
+        <div class="group relative md:col-span-2 rounded-2xl border border-border bg-surface p-8 hover:border-accent/30 hover:bg-surface-hover transition-all duration-(--duration-medium) hover:shadow-[0_0_40px_var(--color-accent-glow)] overflow-hidden">
+          <div class="absolute top-0 right-0 w-64 h-64 bg-accent/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+          <div class="relative grid md:grid-cols-2 gap-8 items-center">
+            <div>
+              <div class="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent mb-4">
+                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+                </svg>
+              </div>
+              <h3 class="font-display font-semibold text-xl mb-2">Hands-on Exercises</h3>
+              <p class="text-text-secondary leading-relaxed">
+                Every concept comes with a working exercise. Read the explanation, write the code, run the tests. No passive watching.
+              </p>
+            </div>
+            <div class="hidden md:block font-mono text-sm text-text-muted bg-bg rounded-xl p-5 border border-border-subtle">
+              <div><span class="text-success">PASS</span> ex1-hello-template</div>
+              <div><span class="text-success">PASS</span> ex2-primeira-tool</div>
+              <div><span class="text-success">PASS</span> ex3-csv-avancado</div>
+              <div><span class="text-success">PASS</span> ex4-ab-testing</div>
+              <div class="mt-2 text-success">Tests: 260+ passed, 260+ total</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="group rounded-2xl border border-border bg-surface p-8 hover:border-accent/30 hover:bg-surface-hover transition-all duration-(--duration-medium) hover:shadow-[0_0_40px_var(--color-accent-glow)]">
+          <div class="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent mb-4">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+            </svg>
+          </div>
+          <h3 class="font-display font-semibold text-xl mb-2">Real Claude API Calls</h3>
+          <p class="text-text-secondary leading-relaxed">
+            Not a simulation. Every exercise makes real API calls to Claude. System prompts, streaming, tool use, multi-turn — the real deal.
+          </p>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="group rounded-2xl border border-border bg-surface p-8 hover:border-accent/30 hover:bg-surface-hover transition-all duration-(--duration-medium) hover:shadow-[0_0_40px_var(--color-accent-glow)]">
+          <div class="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent mb-4">
+            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 00.75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 00-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0112 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 01-.673-.38m0 0A2.18 2.18 0 013 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 013.413-.387m7.5 0V5.25A2.25 2.25 0 0013.5 3h-3a2.25 2.25 0 00-2.25 2.25v.894m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+          </div>
+          <h3 class="font-display font-semibold text-xl mb-2">4 Portfolio Projects</h3>
+          <p class="text-text-secondary leading-relaxed">
+            Each day produces a deployable project. Template engines, chatbots, RAG systems, multi-agent orchestration. Ship to your GitHub.
+          </p>
+        </div>
+
+        <!-- Card 4 -->
+        <div class="group md:col-span-2 rounded-2xl border border-border bg-surface p-8 hover:border-accent/30 hover:bg-surface-hover transition-all duration-(--duration-medium) hover:shadow-[0_0_40px_var(--color-accent-glow)]">
+          <div class="grid md:grid-cols-[1fr_auto] gap-8 items-center">
+            <div>
+              <div class="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent mb-4">
+                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
+                </svg>
+              </div>
+              <h3 class="font-display font-semibold text-xl mb-2">From Zero to Production</h3>
+              <p class="text-text-secondary leading-relaxed max-w-xl">
+                Day 1: API basics. Day 4: Deploying a multi-agent system with monitoring. Progressive difficulty, no magic jumps.
+              </p>
+            </div>
+            <div class="hidden md:flex flex-col gap-2 font-mono text-xs">
+              <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-bg border border-border-subtle">
+                <span class="text-accent">Day 1</span>
+                <span class="text-text-muted">Foundations</span>
+                <span class="ml-auto text-success">Free</span>
+              </div>
+              <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-bg border border-border-subtle">
+                <span class="text-accent">Day 2</span>
+                <span class="text-text-muted">RAG Systems</span>
+                <span class="ml-auto text-warning">Pro</span>
+              </div>
+              <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-bg border border-border-subtle">
+                <span class="text-accent">Day 3</span>
+                <span class="text-text-muted">Multi-Agent</span>
+                <span class="ml-auto text-warning">Pro</span>
+              </div>
+              <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-bg border border-border-subtle">
+                <span class="text-accent">Day 4</span>
+                <span class="text-text-muted">MLOps Deploy</span>
+                <span class="ml-auto text-warning">Pro</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================
+       Curriculum Preview (Module Cards)
+       ========================================= -->
+  <section class="py-32 px-6 relative">
+    <div class="absolute inset-0 bg-[radial-gradient(ellipse_60%_30%_at_50%_50%,rgba(6,182,212,0.04),transparent)]"></div>
+    <div class="mx-auto max-w-7xl relative" data-animate-on-scroll>
+      <div class="text-center mb-16">
+        <h2 class="font-display font-bold text-3xl lg:text-4xl tracking-tight">
+          Day 1 Curriculum
+        </h2>
+        <p class="mt-4 text-text-secondary text-lg">
+          4 modules. {totalExercises} exercises. Completely free.
+        </p>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        {COURSE_MANIFEST[0].modules.map((mod, index) => (
+          <a
+            href={url(`/day-1/${mod.slug}`)}
+            class="group relative block rounded-2xl border border-border bg-surface p-6 hover:border-accent/30 hover:bg-surface-hover transition-all duration-300 hover:shadow-[0_0_40px_var(--color-accent-glow)] animate-fade-in"
+            style={`animation-delay: ${index * 100}ms`}
+          >
+            <div class="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center text-accent mb-4 font-mono text-sm font-bold group-hover:bg-accent/20 transition-colors">
+              {mod.icon}
+            </div>
+            <h3 class="font-display font-semibold text-lg text-text mb-2 group-hover:text-accent transition-colors">
+              {mod.title}
+            </h3>
+            <p class="text-sm text-text-secondary leading-relaxed mb-4">
+              {mod.description}
+            </p>
+            <div class="flex items-center gap-2 text-xs text-text-muted">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
+              {mod.exercises.length} exercises
+            </div>
+            <div class="absolute bottom-5 right-5 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-[-4px] group-hover:translate-x-0">
+              <svg class="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================
+       ELEMENT 8: Open Source & Verifiable
+       ========================================= -->
+  <section class="py-32 px-6">
+    <div class="mx-auto max-w-7xl" data-animate-on-scroll>
+      <div class="text-center mb-16">
+        <h2 class="font-display font-bold text-3xl lg:text-4xl tracking-tight">
+          Open source. <span class="text-accent">Fully verifiable.</span>
+        </h2>
+        <p class="mt-4 text-text-secondary text-lg max-w-2xl mx-auto">
+          No trust required. Every exercise, solution, and test is public on GitHub. Read the code before you commit a minute.
+        </p>
+      </div>
+
+      <div class="grid md:grid-cols-3 gap-6">
+        <!-- Card: GitHub repo -->
+        <a
+          href="https://github.com/luciocw/AI-Engineering-Course"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="group rounded-2xl border border-border bg-surface p-6 hover:border-accent/20 hover:bg-surface-hover transition-all duration-300"
+        >
+          <div class="w-10 h-10 rounded-xl bg-surface-hover flex items-center justify-center mb-4 group-hover:bg-accent/10 transition-colors">
+            <svg class="w-5 h-5 text-text-secondary group-hover:text-accent transition-colors" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+          </div>
+          <h3 class="font-display font-semibold text-lg mb-1 group-hover:text-accent transition-colors">Public Repository</h3>
+          <p class="text-sm text-text-secondary leading-relaxed">
+            Every line of code is on GitHub. Fork it, star it, read it before you start. No hidden content.
+          </p>
+          <div class="mt-4 flex items-center gap-1.5 text-xs text-accent opacity-0 group-hover:opacity-100 transition-opacity">
+            View on GitHub
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </div>
+        </a>
+
+        <!-- Card: Tests -->
+        <div class="rounded-2xl border border-border bg-surface p-6">
+          <div class="w-10 h-10 rounded-xl bg-success/10 flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h3 class="font-display font-semibold text-lg mb-1">260+ Tests Passing</h3>
+          <p class="text-sm text-text-secondary leading-relaxed">
+            Every exercise has automated tests. Run <span class="font-mono text-xs text-accent bg-accent/5 px-1.5 py-0.5 rounded">npm test</span> and know immediately if your code works.
+          </p>
+          <div class="mt-4 font-mono text-xs text-text-muted space-y-1">
+            <div><span class="text-success">PASS</span> handlebars (70)</div>
+            <div><span class="text-success">PASS</span> claude-api (70)</div>
+            <div><span class="text-success">PASS</span> tool-use (65)</div>
+            <div><span class="text-success">PASS</span> data-pipelines (55)</div>
+          </div>
+        </div>
+
+        <!-- Card: No BS -->
+        <div class="rounded-2xl border border-border bg-surface p-6">
+          <div class="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center mb-4">
+            <svg class="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+            </svg>
+          </div>
+          <h3 class="font-display font-semibold text-lg mb-1">No Fake Promises</h3>
+          <p class="text-sm text-text-secondary leading-relaxed">
+            No fabricated testimonials. No inflated student counts. Just code you can read, tests you can run, and skills you can verify.
+          </p>
+          <div class="mt-4 text-xs text-text-muted">
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border bg-bg">
+              <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+              Honest by design
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================
+       ELEMENT 9: FAQ
+       ========================================= -->
+  <section id="faq" class="py-32 px-6 relative">
+    <div class="absolute inset-0 bg-[radial-gradient(ellipse_50%_30%_at_50%_0%,rgba(6,182,212,0.04),transparent)]"></div>
+    <div class="mx-auto max-w-4xl relative" data-animate-on-scroll>
+      <div class="text-center mb-16">
+        <h2 class="font-display font-bold text-3xl lg:text-4xl tracking-tight">
+          Frequently Asked Questions
+        </h2>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        {[
+          { q: 'Do I need AI experience?', a: 'No. You need TypeScript basics — variables, functions, async/await. We start from your first API call and build up progressively.' },
+          { q: 'What tech stack is used?', a: 'TypeScript, Node.js, Claude API (Anthropic), Zod for validation, Vitest for testing. Day 2+ adds Qdrant, Docker, LangSmith.' },
+          { q: 'Is Day 1 really free?', a: 'Yes, completely free. All 80 exercises, all solutions, all 260+ tests. No credit card, no trial, no catch. Day 1 is free forever.' },
+          { q: 'How long does each day take?', a: 'Each day is designed for 4-6 hours of focused work. You can spread it across multiple sessions.' },
+          { q: 'Do I need a Claude API key?', a: 'For running the exercises locally, yes — sign up at console.anthropic.com. Reading the code and solutions works without one.' },
+          { q: 'Can I use this for my portfolio?', a: 'Absolutely. Each day produces a deployable project. Push to GitHub, link from your resume.' },
+        ].map((faq, index) => (
+          <details class="group rounded-xl border border-border bg-surface hover:border-accent/20 transition-colors">
+            <summary class="flex items-center justify-between gap-4 px-6 py-4 cursor-pointer list-none text-sm font-medium text-text select-none">
+              {faq.q}
+              <svg class="w-4 h-4 text-text-muted shrink-0 transition-transform duration-(--duration-medium) group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+            <div class="px-6 pb-4 text-sm text-text-secondary leading-relaxed">
+              {faq.a}
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================
+       ELEMENT 10: Final CTA
+       ========================================= -->
+  <section class="py-32 px-6 relative overflow-hidden">
+    <!-- Background glow -->
+    <div class="absolute inset-0 bg-[radial-gradient(ellipse_60%_40%_at_50%_50%,rgba(6,182,212,0.1),transparent)]"></div>
+    <div class="absolute inset-0 bg-[radial-gradient(ellipse_40%_50%_at_30%_50%,rgba(99,102,241,0.05),transparent)]"></div>
+
+    <div class="mx-auto max-w-3xl text-center relative" data-animate-on-scroll>
+      <h2 class="font-display font-bold text-3xl lg:text-5xl tracking-tight leading-tight">
+        Start Your AI Engineering Journey
+      </h2>
+      <p class="mt-6 text-lg text-text-secondary">
+        Join developers building the next generation of AI-powered products.
+      </p>
+
+      <a
+        href={url('/day-1')}
+        class="group inline-flex items-center gap-3 mt-10 px-12 py-5 text-xl font-semibold font-display rounded-xl bg-accent text-bg hover:bg-accent-hover shadow-[0_0_40px_var(--color-accent-glow)] hover:shadow-[0_0_60px_var(--color-accent-glow-strong)] hover:scale-[1.03] transition-all duration-(--duration-medium) animate-pulse-glow"
+      >
+        Start Learning — Free
+        <svg class="w-6 h-6 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+      </a>
+
+      <p class="mt-6 text-sm text-text-muted">
+        No account required. Start reading immediately.
+      </p>
+    </div>
+  </section>
+
+</MarketingLayout>
+
+<script>
+  // === Counter animation ===
+  const counters = document.querySelectorAll('[data-count]');
+  const counterObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const el = entry.target as HTMLElement;
+      const target = parseInt(el.dataset.count || '0', 10);
+      const suffix = el.dataset.suffix || '';
+      let current = 0;
+      const step = Math.max(1, Math.floor(target / 30));
+      const interval = setInterval(() => {
+        current = Math.min(current + step, target);
+        el.textContent = `${current}${suffix}`;
+        if (current >= target) clearInterval(interval);
+      }, 30);
+      counterObserver.unobserve(el);
+    });
+  }, { threshold: 0.5 });
+  counters.forEach((el) => counterObserver.observe(el));
+
+  // === 3D tilt on hero code block ===
+  const heroCode = document.getElementById('hero-code');
+  if (heroCode) {
+    const container = heroCode.parentElement;
+    container?.addEventListener('mousemove', (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width - 0.5;
+      const y = (e.clientY - rect.top) / rect.height - 0.5;
+      heroCode.style.transform = `perspective(1200px) rotateY(${-6 + x * 8}deg) rotateX(${3 - y * 8}deg)`;
+    });
+    container?.addEventListener('mouseleave', () => {
+      heroCode.style.transform = 'perspective(1200px) rotateY(-6deg) rotateX(3deg)';
+    });
+  }
+
+  // === Cursor glow on hero ===
+  const cursorGlow = document.getElementById('cursor-glow');
+  const heroSection = cursorGlow?.parentElement;
+  if (cursorGlow && heroSection) {
+    heroSection.addEventListener('mousemove', (e: MouseEvent) => {
+      const rect = heroSection.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      cursorGlow.style.background = `radial-gradient(600px circle at ${x}px ${y}px, rgba(6, 182, 212, 0.06), transparent 40%)`;
+      cursorGlow.style.opacity = '1';
+    });
+    heroSection.addEventListener('mouseleave', () => {
+      cursorGlow.style.opacity = '0';
+    });
+  }
+
+  // === Scroll-triggered fade-in ===
+  const fadeElements = document.querySelectorAll('[data-animate-on-scroll]');
+  const fadeObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('animate-fade-in');
+        fadeObserver.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  fadeElements.forEach((el) => fadeObserver.observe(el));
+</script>

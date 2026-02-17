@@ -1,0 +1,88 @@
+---
+import LessonLayout from '@/layouts/lesson-layout.astro';
+import { COURSE_MANIFEST } from '@/lib/course/manifest';
+import { url } from '@/lib/url';
+
+const day = COURSE_MANIFEST[0];
+const modules = day.modules;
+
+const moduleIcons: Record<string, string> = {
+  'module-1-handlebars': '{ }',
+  'module-2-llm-api': 'AI',
+  'module-3-tool-use': '🔧',
+  'module-4-data-pipelines': '📊',
+};
+---
+
+<LessonLayout
+  title={`${day.title} — Build.AI`}
+  description={day.description}
+  breadcrumbs={[{ label: 'Home', href: url('/') }, { label: 'Day 1' }]}
+>
+  <Fragment slot="sidebar">
+    <div class="py-4 px-4">
+      <h3 class="text-sm font-semibold text-text mb-3">Modules</h3>
+      <nav class="space-y-1">
+        {modules.map((mod, i) => (
+          <a
+            href={url(`/day-1/${mod.slug}`)}
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-text-secondary hover:bg-surface-hover hover:text-text transition-colors"
+          >
+            <span class="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center text-xs font-mono text-accent">
+              {i + 1}
+            </span>
+            <span class="truncate">{mod.title}</span>
+            <span class="ml-auto text-xs text-text-muted">{mod.exercises.length}</span>
+          </a>
+        ))}
+      </nav>
+    </div>
+  </Fragment>
+
+  <div class="space-y-8">
+    <div>
+      <h1 class="text-3xl font-display font-bold text-text">{day.title}</h1>
+      <p class="mt-2 text-text-secondary text-lg">{day.description}</p>
+      <div class="mt-3 flex items-center gap-4 text-sm text-text-muted">
+        <span>📚 {modules.reduce((sum, m) => sum + m.exercises.length, 0)} exercises</span>
+        <span>⏱ ~8 hours</span>
+        <span class="text-success font-medium">FREE</span>
+      </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2">
+      {modules.map((mod, i) => (
+        <a
+          href={url(`/day-1/${mod.slug}`)}
+          class="group block rounded-xl border border-border bg-surface p-6 hover:border-accent/30 hover:bg-surface-hover transition-all duration-300"
+        >
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center text-accent font-mono text-sm font-bold">
+              {moduleIcons[mod.slug] || String(i + 1)}
+            </div>
+            <div>
+              <h3 class="font-semibold text-text group-hover:text-accent transition-colors">
+                {mod.title}
+              </h3>
+              <span class="text-xs text-text-muted">{mod.exercises.length} exercises</span>
+            </div>
+          </div>
+          <p class="text-sm text-text-secondary leading-relaxed">
+            {mod.description}
+          </p>
+          <div class="mt-4 flex items-center gap-2 text-xs text-text-muted">
+            <span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              {mod.exercises.filter(e => e.difficulty === 'beginner').length} beginner
+            </span>
+            <span class="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              {mod.exercises.filter(e => e.difficulty === 'intermediate').length} intermediate
+            </span>
+            <span class="px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20">
+              {mod.exercises.filter(e => e.difficulty === 'advanced').length} advanced
+            </span>
+          </div>
+        </a>
+      ))}
+    </div>
+  </div>
+</LessonLayout>

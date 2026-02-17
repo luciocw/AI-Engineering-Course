@@ -1,0 +1,100 @@
+---
+import LessonLayout from '@/layouts/lesson-layout.astro';
+import { getAllModulePaths } from '@/lib/course/exercises';
+import { url } from '@/lib/url';
+
+export function getStaticPaths() {
+  return getAllModulePaths();
+}
+
+const { module: mod, day } = Astro.props;
+
+const difficultyColors: Record<string, string> = {
+  beginner: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  intermediate: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  advanced: 'bg-red-500/10 text-red-400 border-red-500/20',
+};
+---
+
+<LessonLayout
+  title={`${mod.title} — Build.AI`}
+  description={mod.description}
+  breadcrumbs={[
+    { label: 'Home', href: url('/') },
+    { label: 'Day 1', href: url('/day-1') },
+    { label: mod.title },
+  ]}
+>
+  <Fragment slot="sidebar">
+    <div class="py-4 px-4">
+      <a href={url('/day-1')} class="text-sm text-text-secondary hover:text-accent transition-colors">
+        ← Back to Day 1
+      </a>
+      <h3 class="text-sm font-semibold text-text mt-4 mb-3">{mod.title}</h3>
+      <nav class="space-y-0.5">
+        {mod.exercises.map((ex: typeof mod.exercises[0], i: number) => (
+          <a
+            href={url(`/day-1/${mod.slug}/${ex.slug}`)}
+            class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-text-secondary hover:bg-surface-hover hover:text-text transition-colors"
+          >
+            <span class="text-xs font-mono text-text-muted w-5">{String(i + 1).padStart(2, '0')}</span>
+            <span class="truncate flex-1">{ex.title}</span>
+          </a>
+        ))}
+      </nav>
+    </div>
+  </Fragment>
+
+  <div class="space-y-8">
+    <div>
+      <h1 class="text-3xl font-display font-bold text-text">{mod.title}</h1>
+      <p class="mt-2 text-text-secondary text-lg">{mod.description}</p>
+      <div class="mt-3 flex items-center gap-4 text-sm text-text-muted">
+        <span>📚 {mod.exercises.length} exercises</span>
+        <span>⏱ ~{mod.exercises.reduce((sum: number, e: typeof mod.exercises[0]) => sum + e.estimatedMinutes, 0)} min</span>
+      </div>
+    </div>
+
+    {/* Start button */}
+    <a
+      href={url(`/day-1/${mod.slug}/${mod.exercises[0].slug}`)}
+      class="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium rounded-xl bg-accent text-white hover:brightness-110 transition-all"
+    >
+      <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+      </svg>
+      Start Module
+    </a>
+
+    {/* Exercise list */}
+    <div class="space-y-2">
+      {mod.exercises.map((ex: typeof mod.exercises[0], i: number) => (
+        <a
+          href={url(`/day-1/${mod.slug}/${ex.slug}`)}
+          class="group flex items-center gap-4 p-4 rounded-xl border border-border bg-surface hover:border-accent/30 hover:bg-surface-hover transition-all"
+        >
+          <span class="w-8 h-8 rounded-lg bg-surface-hover flex items-center justify-center text-sm font-mono text-text-muted group-hover:text-accent group-hover:bg-accent/10 transition-colors">
+            {String(i + 1).padStart(2, '0')}
+          </span>
+
+          <div class="flex-1 min-w-0">
+            <h3 class="text-sm font-medium text-text group-hover:text-accent transition-colors">
+              {ex.title}
+            </h3>
+            <p class="text-xs text-text-muted mt-0.5 truncate">{ex.description}</p>
+          </div>
+
+          <span class={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full border ${difficultyColors[ex.difficulty]}`}>
+            {ex.difficulty}
+          </span>
+
+          <span class="text-xs text-text-muted font-mono">~{ex.estimatedMinutes}m</span>
+
+          <svg class="w-4 h-4 text-text-muted group-hover:text-accent transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </a>
+      ))}
+    </div>
+  </div>
+</LessonLayout>

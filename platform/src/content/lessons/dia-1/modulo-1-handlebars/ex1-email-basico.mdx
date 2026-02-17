@@ -1,0 +1,55 @@
+---
+title: "Basic Email Template"
+description: "Your first Handlebars template with variables and dynamic content."
+day: "dia-1"
+module: "modulo-1-handlebars"
+exercise: 1
+difficulty: "beginner"
+estimatedMinutes: 15
+isFree: true
+tags: ["handlebars", "templates", "email"]
+---
+
+## The Goal
+
+Create an email template using Handlebars that personalizes content with customer data. You'll learn how variables (`{{name}}`), basic expressions, and template compilation work.
+
+## What You'll Build
+
+A professional welcome email template that:
+- Greets the customer by name
+- Shows their subscription plan
+- Displays their monthly cost
+- Includes a dynamic support email
+
+## Key Concepts
+
+**Handlebars** is a templating engine that lets you embed dynamic values into static text. Think of it as string interpolation on steroids.
+
+```typescript
+import Handlebars from 'handlebars';
+
+// 1. Define a template
+const template = Handlebars.compile('Hello, {{name}}!');
+
+// 2. Pass data
+const result = template({ name: 'TechCorp' });
+// → "Hello, TechCorp!"
+```
+
+Every `{{expression}}` in the template gets replaced by the corresponding value from your data object.
+
+## Exercise
+
+Open `exercicios/ex1-email-basico.ts` and implement the email template. Your template should accept customer data and produce a formatted welcome email.
+
+**Requirements:**
+- Use `{{variable}}` syntax for all dynamic values
+- Include: greeting, plan name, monthly cost, support email
+- Handle the `Handlebars.compile()` → `template(data)` flow
+
+## Tips
+
+- `Handlebars.compile()` returns a function — call it with your data object
+- Variable names in `{{}}` must match your data object keys exactly
+- Handlebars auto-escapes HTML by default (safe for emails)
