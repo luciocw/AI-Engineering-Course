@@ -7,6 +7,8 @@ import { resolve } from 'path';
 
 export default defineConfig({
   output: 'static',
+  site: 'https://luciocw.github.io',
+  base: '/AI-Engineering-Course',
 
   integrations: [
     expressiveCode({
